@@ -40,6 +40,22 @@ function getResume(id) {
   return hydrate("resumes", db.prepare("SELECT * FROM resumes WHERE id=?").get(id));
 }
 
+// Resolve a JD's full text, following the `file:` indirection used for uploads.
+async function resolveJdText(jd) {
+  let text = jd.raw_text || "";
+  if (text.startsWith("file:")) text = await extractText(text.slice(5));
+  return text;
+}
+
+// Extract (and cache) the must-have skills for a JD from its text + notes.
+async function ensureJdSkills(jd) {
+  if (Array.isArray(jd.must_have_skills) && jd.must_have_skills.length) return jd.must_have_skills;
+  const text = await resolveJdText(jd);
+  const skills = await ai.extractMustHaveSkills(text, jd.extra_context);
+  db.prepare("UPDATE jds SET must_have_skills=? WHERE id=?").run(j(skills), jd.id);
+  return skills;
+}
+
 // ---------------------------------------------- background AI processors -----
 async function processJdCriteria(jdId) {
   try {
@@ -193,7 +209,9 @@ app.post("/api/jds/:id/retry", (req, res) => {
 app.post("/api/jds/:id/questions", (req, res) => {
   const { extra_context } = req.body || {};
   if (extra_context !== undefined)
-    db.prepare("UPDATE jds SET extra_context=? WHERE id=?").run(extra_context, req.params.id);
+    // Notes feed must-have-skill extraction, so clear the cache to re-derive them.
+    db.prepare("UPDATE jds SET extra_context=?, must_have_skills=NULL WHERE id=?")
+      .run(extra_context, req.params.id);
   processJdQuestions(req.params.id, extra_context);
   res.json({ ok: true });
 });
@@ -257,6 +275,69 @@ app.post("/api/resumes/:id/score-vs-shortlist", (req, res) => {
     .run(req.params.id);
   processShortlistScore(req.params.id);
   res.json(getResume(req.params.id));
+});
+
+// Skills-matrix export: for each candidate, a per-must-have-skill statement +
+// score (assessed fresh against the resume), pivoted into one column per skill.
+app.post("/api/resumes/skill-matrix", async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.resume_ids) ? req.body.resume_ids : [];
+    if (!ids.length) return res.status(400).json({ error: "resume_ids required" });
+    const resumes = ids.map(getResume).filter(Boolean);
+    if (!resumes.length) return res.status(404).json({ error: "no resumes found" });
+
+    // Resolve each involved JD's must-have skills + full text once.
+    const jdCache = new Map(); // jd_id -> { text, skills }
+    for (const r of resumes) {
+      if (jdCache.has(r.jd_id)) continue;
+      const jd = getJd(r.jd_id);
+      if (!jd) continue;
+      const skills = await ensureJdSkills(jd);
+      jdCache.set(r.jd_id, { text: await resolveJdText(jd), skills });
+    }
+
+    // Union of skill columns across all involved JDs (dedupe by lowercased name).
+    const columns = [];
+    const colSeen = new Set();
+    for (const { skills } of jdCache.values()) {
+      for (const s of skills) {
+        const key = s.name.toLowerCase();
+        if (!colSeen.has(key)) { colSeen.add(key); columns.push(s.name); }
+      }
+    }
+
+    // Assess each resume against its own JD's skills (in parallel).
+    const rows = await Promise.all(
+      resumes.map(async (r) => {
+        const entry = jdCache.get(r.jd_id);
+        const skills = entry?.skills || [];
+        let assessments = [];
+        if (skills.length) {
+          try {
+            const text = await extractText(r.file_path);
+            assessments = await ai.assessSkills(text, skills);
+          } catch { /* leave cells blank if the resume can't be read */ }
+        }
+        const byName = new Map(assessments.map((a) => [a.skill.toLowerCase(), a]));
+        const cells = {};
+        for (const s of skills) {
+          const a = byName.get(s.name.toLowerCase());
+          if (a) cells[s.name] = { statement: a.statement, score: a.score };
+        }
+        return {
+          candidate: r.candidate_name || r.file_name,
+          job_id: r.jd_id,
+          job_description: entry?.text || "",
+          final_score: r.overall_score ?? null,
+          cells,
+        };
+      })
+    );
+
+    res.json({ columns, rows });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
 });
 
 app.delete("/api/resumes/:id", async (req, res) => {

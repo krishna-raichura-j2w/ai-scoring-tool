@@ -1,20 +1,21 @@
-import { execFile } from "child_process";
-import { promisify } from "util";
 import { readFile } from "fs/promises";
 import { extname } from "path";
 import mammoth from "mammoth";
-
-const execFileP = promisify(execFile);
+import { PDFParse } from "pdf-parse";
 
 // Extract plain text from a resume / JD file based on its extension.
 export async function extractText(filePath) {
   const ext = extname(filePath).toLowerCase();
   if (ext === ".pdf") {
-    // pdftotext (poppler) -> stdout
-    const { stdout } = await execFileP("pdftotext", ["-layout", filePath, "-"], {
-      maxBuffer: 1024 * 1024 * 20,
-    });
-    return clean(stdout);
+    // pure-JS PDF text extraction (no external binary required)
+    const data = await readFile(filePath);
+    const parser = new PDFParse({ data });
+    try {
+      const { text } = await parser.getText();
+      return clean(text);
+    } finally {
+      await parser.destroy();
+    }
   }
   if (ext === ".docx") {
     const { value } = await mammoth.extractRawText({ path: filePath });

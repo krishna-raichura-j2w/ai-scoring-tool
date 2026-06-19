@@ -7,7 +7,13 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": "http://localhost:3001",
+      // The client prefixes API calls with the app base (for the prod reverse
+      // proxy), so in dev we proxy the prefixed path and strip the base before
+      // forwarding to the backend, which serves routes under /api.
+      "/j2w-ai-scoring-agent/api": {
+        target: "http://localhost:3001",
+        rewrite: (p) => p.replace(/^\/j2w-ai-scoring-agent/, ""),
+      },
     },
   },
 });

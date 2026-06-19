@@ -37,6 +37,7 @@ export default function Index() {
   const [newClient, setNewClient] = useState("");
   const [jdText, setJdText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const activeClientRef = useRef(null);
   activeClientRef.current = activeClient;
@@ -188,6 +189,32 @@ export default function Index() {
     const csv = rows.map((row) => row.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
     downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8;" }), "candidates.csv");
     toast({ title: "CSV exported", description: `${selectedResumes.length} candidate(s)` });
+  }
+
+  // Skills matrix: one column per must-have skill (from JD + notes); each cell is
+  // an AI statement about the candidate for that skill, with the score appended.
+  async function exportSkillsMatrix() {
+    if (selectedResumes.length === 0) return;
+    setExporting(true);
+    try {
+      const { columns, rows } = await api.skillMatrix(selectedResumes.map((r) => r.id));
+      const cellText = (cell) =>
+        !cell ? "" : cell.score == null ? cell.statement : `${cell.statement} (${cell.score})`;
+      const data = [
+        ["Candidate Name", "Job ID", "Job Description", ...columns, "Final Score"],
+        ...rows.map((row) => [
+          row.candidate ?? "", row.job_id ?? "", row.job_description ?? "",
+          ...columns.map((c) => cellText(row.cells?.[c])),
+          row.final_score?.toString() ?? "",
+        ]),
+      ];
+      const csv = data.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+      downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8;" }), "skills-matrix.csv");
+      toast({ title: "Skills matrix exported", description: `${rows.length} candidate(s) × ${columns.length} skill(s)` });
+    } catch (e) {
+      toast({ title: "Export failed", description: e.message, variant: "destructive" });
+    }
+    setExporting(false);
   }
 
   function exportPdf() {
@@ -545,6 +572,10 @@ export default function Index() {
                     <div className="sticky top-[57px] z-10 flex items-center gap-2 bg-primary text-primary-foreground rounded-lg px-4 py-2.5 shadow-md">
                       <span className="text-sm font-medium flex-1">{selected.size} selected</span>
                       <Button size="sm" variant="secondary" onClick={exportCsv}><FileSpreadsheet className="w-4 h-4 mr-1.5" /> Details (CSV)</Button>
+                      <Button size="sm" variant="secondary" onClick={exportSkillsMatrix} disabled={exporting}>
+                        {exporting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Sparkles className="w-4 h-4 mr-1.5" />}
+                        Skills Matrix (CSV)
+                      </Button>
                       <Button size="sm" variant="secondary" onClick={exportPdf}><Download className="w-4 h-4 mr-1.5" /> Reports (PDF)</Button>
                       <Button size="sm" variant="ghost" className="text-primary-foreground hover:bg-primary/80" onClick={() => setSelected(new Set())}><X className="w-4 h-4" /></Button>
                     </div>

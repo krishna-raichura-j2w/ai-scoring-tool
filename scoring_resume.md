@@ -1,0 +1,3 @@
+I want to build a new feature which should be used for ranking the candidates based on skills present in JD and additional notes. We already have scoring mechanism and pdf export logic. I want to export this in a better format in csv file. It should be something like Candidate Names, Job ID, Job Description, Must Have Skills (extracted from JD and Notes), Final Score
+
+Now Within Each skills, there should be a statement regarding that skills for this candidate based on Resume and provide score at the end of cell for that skill. 

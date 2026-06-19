@@ -70,9 +70,19 @@ CREATE TABLE IF NOT EXISTS resumes (
 );
 `);
 
+// Lightweight migrations for columns added after the initial schema.
+function addColumnIfMissing(table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+// Cached must-have skills for the skills-matrix CSV export (extracted from JD + notes).
+addColumnIfMissing("jds", "must_have_skills", "TEXT");
+
 // JSON columns are stored as text; (de)serialize at the edges.
 const JSON_FIELDS = {
-  jds: ["criteria"],
+  jds: ["criteria", "must_have_skills"],
   resumes: ["relevant_skills", "criteria_scores", "shortlist_scores"],
 };
 

@@ -137,6 +137,55 @@ Score honestly. If information is missing, score conservatively and say so in th
   };
 }
 
+// ---- 5. Extract must-have skills from a JD + additional notes ----------------
+export async function extractMustHaveSkills(jdText, extraContext) {
+  const system = `You are an expert technical recruiter. From a job description and the recruiter's additional notes, extract the concrete MUST-HAVE skills used to rank candidates.
+Return STRICT JSON:
+{
+  "skills": [
+    { "name": "short skill name (2-4 words)", "description": "what evidence in a resume satisfies this skill" }
+  ]
+}
+Rules:
+- 5 to 12 skills. Focus on hard requirements (technologies, tools, domains, concrete competencies), not generic soft skills unless the role clearly demands them.
+- Treat the ADDITIONAL NOTES as higher priority than the JD when they conflict or add requirements.
+- Keep names short and use them consistently.`;
+  const notes = extraContext
+    ? `\n\nADDITIONAL NOTES (weight these higher than the JD):\n"""\n${extraContext}\n"""`
+    : "";
+  const user = `JOB DESCRIPTION:\n"""\n${jdText.slice(0, 12000)}\n"""${notes}`;
+  const data = await chatJSON(system, user);
+  const skills = Array.isArray(data.skills) ? data.skills : [];
+  return skills
+    .map((s) => ({ name: String(s.name || "").trim(), description: String(s.description || "").trim() }))
+    .filter((s) => s.name);
+}
+
+// ---- 6. Assess one resume against a list of must-have skills -----------------
+export async function assessSkills(resumeText, skills) {
+  if (!skills.length) return [];
+  const system = `You assess a candidate's resume against a fixed list of MUST-HAVE skills.
+Return STRICT JSON:
+{
+  "assessments": [
+    { "skill": "<must exactly match a provided skill name>", "statement": "1-2 sentence evidence-based statement on how this candidate demonstrates (or lacks) this skill", "score": <0-100> }
+  ]
+}
+Rules:
+- Return exactly one assessment for EVERY provided skill, using the same skill name.
+- Base statements only on the resume. If there is no evidence, say so plainly and score low.`;
+  const user = `MUST-HAVE SKILLS:\n${JSON.stringify(
+    skills
+  )}\n\nRESUME:\n"""\n${resumeText.slice(0, 14000)}\n"""`;
+  const data = await chatJSON(system, user);
+  const out = Array.isArray(data.assessments) ? data.assessments : [];
+  return out.map((a) => ({
+    skill: String(a.skill || "").trim(),
+    statement: String(a.statement || "").trim(),
+    score: Number.isFinite(Number(a.score)) ? Math.round(Number(a.score)) : null,
+  }));
+}
+
 // ---- 4. Score a resume vs the shortlisted candidates ------------------------
 export async function scoreVsShortlist(resumeText, shortlisted) {
   const profiles = shortlisted

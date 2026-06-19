@@ -47,4 +47,6 @@ export const api = {
     json(fetch(url(`/api/resumes/${id}/shortlist`), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ is_shortlisted }) })),
   scoreVsShortlist: (id) => json(fetch(url(`/api/resumes/${id}/score-vs-shortlist`), { method: "POST" })),
   deleteResume: (id) => json(fetch(url(`/api/resumes/${id}`), { method: "DELETE" })),
+  skillMatrix: (resume_ids) =>
+    json(fetch(url("/api/resumes/skill-matrix"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ resume_ids }) })),
 };

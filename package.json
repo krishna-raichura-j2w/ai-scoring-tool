@@ -18,7 +18,8 @@
     "express": "^4.21.2",
     "mammoth": "^1.9.0",
     "multer": "^1.4.5-lts.1",
-    "openai": "^4.79.0"
+    "openai": "^4.79.0",
+    "pdf-parse": "^2.4.5"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"
