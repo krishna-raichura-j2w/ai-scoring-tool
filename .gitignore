@@ -1,0 +1,10 @@
+node_modules/
+client/node_modules/
+client/dist/
+data/
+.env
+*.log
+
+# tooling artifacts
+.playwright-mcp/
+*.png
