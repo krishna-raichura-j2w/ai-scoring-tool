@@ -31,6 +31,8 @@ export const api = {
     return json(fetch(url("/api/jds/upload"), { method: "POST", body: fd }));
   },
   retryJd: (id) => json(fetch(url(`/api/jds/${id}/retry`), { method: "POST" })),
+  getJdText: (id) => json(fetch(url(`/api/jds/${id}/text`))),
+  jdFileUrl: (id) => url(`/api/jds/${id}/file`),
   updateJd: (id, fields) =>
     json(fetch(url(`/api/jds/${id}`), { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(fields) })),
   deleteJd: (id) => json(fetch(url(`/api/jds/${id}`), { method: "DELETE" })),

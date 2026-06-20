@@ -3,7 +3,7 @@ import cors from "cors";
 import multer from "multer";
 import { randomUUID } from "crypto";
 import { fileURLToPath } from "url";
-import { dirname, join, extname } from "path";
+import { dirname, join, extname, resolve } from "path";
 import { mkdirSync, existsSync } from "fs";
 import { rm } from "fs/promises";
 import dotenv from "dotenv";
@@ -256,6 +256,28 @@ app.get("/api/jds/:id/questions", (req, res) => {
   res.json(db.prepare("SELECT * FROM jd_questions WHERE jd_id=? ORDER BY order_index").all(req.params.id));
 });
 
+// Resolved full JD text — handles both pasted text and uploaded files (file: indirection).
+app.get("/api/jds/:id/text", async (req, res) => {
+  const jd = getJd(req.params.id);
+  if (!jd) return res.status(404).json({ error: "not found" });
+  try {
+    res.json({ text: await resolveJdText(jd) });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// Serve the original uploaded JD file inline (so PDFs render with their formatting).
+app.get("/api/jds/:id/file", (req, res) => {
+  const jd = getJd(req.params.id);
+  if (!jd || !jd.raw_text?.startsWith("file:")) return res.status(404).json({ error: "no file" });
+  const filePath = resolve(jd.raw_text.slice(5));
+  if (!filePath.startsWith(uploadsDir)) return res.status(403).json({ error: "forbidden" });
+  if (!existsSync(filePath)) return res.status(404).json({ error: "missing" });
+  res.setHeader("Content-Disposition", "inline");
+  res.sendFile(filePath);
+});
+
 // Update editable JD metadata: human job title and job ID.
 app.patch("/api/jds/:id", (req, res) => {
   const { title, job_code } = req.body || {};
@@ -268,9 +290,23 @@ app.patch("/api/jds/:id", (req, res) => {
   res.json(getJd(req.params.id));
 });
 
-app.delete("/api/jds/:id", (req, res) => {
-  db.prepare("DELETE FROM jds WHERE id=?").run(req.params.id);
-  res.json({ ok: true });
+// Delete a JD and everything tied to it: resume + question rows cascade in SQLite,
+// but the uploaded files on disk must be removed explicitly.
+app.delete("/api/jds/:id", async (req, res) => {
+  const id = req.params.id;
+  const jd = getJd(id);
+  if (!jd) return res.json({ ok: true }); // already gone
+  // Gather every file to remove: each resume's file + the JD's own uploaded file.
+  const resumeFiles = db.prepare("SELECT file_path FROM resumes WHERE jd_id=?").all(id).map((r) => r.file_path);
+  const jdFile = jd.raw_text?.startsWith("file:") ? jd.raw_text.slice(5) : null;
+  const resumeCount = resumeFiles.length;
+
+  db.prepare("DELETE FROM jds WHERE id=?").run(id); // cascades to resumes + jd_questions rows
+
+  const files = [...resumeFiles, jdFile].filter(Boolean);
+  await Promise.all(files.map((p) => (existsSync(p) ? rm(p, { force: true }) : Promise.resolve()).catch(() => {})));
+  jobLog.info("deleted JD", { jd: id, title: jd.title, resumes: resumeCount, files: files.length });
+  res.json({ ok: true, deleted_resumes: resumeCount });
 });
 
 // --------------------------------------------------------------- resumes -----
