@@ -732,7 +732,7 @@ export default function Index() {
         ) : (
           <>
             {renderRoleHeader(activeJdObj)}
-            <div key={activeJd + "-" + tab} className="p-8 max-w-6xl w-full mx-auto space-y-6 animate-fade-up">
+            <div key={activeJd + "-" + tab} className="p-8 w-full max-w-[1700px] space-y-6 animate-fade-up">
               {tab === "jd" && renderJdPanel(activeJdObj)}
               {tab === "questions" && renderQuestions(activeJdObj)}
 
