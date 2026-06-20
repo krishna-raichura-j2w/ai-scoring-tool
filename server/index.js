@@ -49,7 +49,9 @@ async function resolveJdText(jd) {
 
 // Extract (and cache) the must-have skills for a JD from its text + notes.
 async function ensureJdSkills(jd) {
-  if (Array.isArray(jd.must_have_skills) && jd.must_have_skills.length) return jd.must_have_skills;
+  const cached = jd.must_have_skills;
+  // Re-extract if missing, or if cached from before skills carried a tier.
+  if (Array.isArray(cached) && cached.length && cached.every((s) => s.tier)) return cached;
   const text = await resolveJdText(jd);
   const skills = await ai.extractMustHaveSkills(text, jd.extra_context);
   db.prepare("UPDATE jds SET must_have_skills=? WHERE id=?").run(j(skills), jd.id);
@@ -64,8 +66,10 @@ async function processJdCriteria(jdId) {
     let text = jd.raw_text;
     if (text.startsWith("file:")) text = await extractText(text.slice(5));
     const { title, criteria } = await ai.extractJdCriteria(text);
+    // Preserve a user-provided title; only fall back to the AI-extracted one.
+    const userTitle = jd.title && jd.title !== "Extracting…" ? jd.title : null;
     db.prepare("UPDATE jds SET title=?, criteria=?, status='ready', error=NULL WHERE id=?").run(
-      title,
+      userTitle || title,
       j(criteria),
       jdId
     );
@@ -177,27 +181,27 @@ app.get("/api/jds", (req, res) => {
   res.json(hydrateAll("jds", rows));
 });
 
-function createJd(clientId, title, rawText) {
+function createJd(clientId, title, rawText, jobCode) {
   const id = randomUUID();
   db.prepare(
-    "INSERT INTO jds (id, client_id, title, raw_text, status, created_at) VALUES (?,?,?,?, 'extracting', ?)"
-  ).run(id, clientId, title, rawText, now());
+    "INSERT INTO jds (id, client_id, title, raw_text, job_code, status, created_at) VALUES (?,?,?,?,?, 'extracting', ?)"
+  ).run(id, clientId, title, rawText, jobCode || null, now());
   processJdCriteria(id);
   return getJd(id);
 }
 
 app.post("/api/jds", (req, res) => {
-  const { client_id, raw_text } = req.body || {};
+  const { client_id, raw_text, title, job_code } = req.body || {};
   if (!client_id) return res.status(400).json({ error: "client_id required" });
   if (!raw_text?.trim()) return res.status(400).json({ error: "raw_text required" });
-  res.json(createJd(client_id, "Extracting…", raw_text.trim()));
+  res.json(createJd(client_id, title?.trim() || "Extracting…", raw_text.trim(), job_code?.trim()));
 });
 
 app.post("/api/jds/upload", upload.single("file"), (req, res) => {
-  const { client_id } = req.body || {};
+  const { client_id, title, job_code } = req.body || {};
   if (!client_id) return res.status(400).json({ error: "client_id required" });
   if (!req.file) return res.status(400).json({ error: "file required" });
-  res.json(createJd(client_id, "Extracting…", `file:${req.file.path}`));
+  res.json(createJd(client_id, title?.trim() || "Extracting…", `file:${req.file.path}`, job_code?.trim()));
 });
 
 app.post("/api/jds/:id/retry", (req, res) => {
@@ -218,6 +222,18 @@ app.post("/api/jds/:id/questions", (req, res) => {
 
 app.get("/api/jds/:id/questions", (req, res) => {
   res.json(db.prepare("SELECT * FROM jd_questions WHERE jd_id=? ORDER BY order_index").all(req.params.id));
+});
+
+// Update editable JD metadata: human job title and job ID.
+app.patch("/api/jds/:id", (req, res) => {
+  const { title, job_code } = req.body || {};
+  const sets = [], vals = [];
+  if (title !== undefined) { sets.push("title=?"); vals.push(String(title).trim() || "Untitled Role"); }
+  if (job_code !== undefined) { sets.push("job_code=?"); vals.push(String(job_code).trim() || null); }
+  if (!sets.length) return res.status(400).json({ error: "nothing to update" });
+  vals.push(req.params.id);
+  db.prepare(`UPDATE jds SET ${sets.join(", ")} WHERE id=?`).run(...vals);
+  res.json(getJd(req.params.id));
 });
 
 app.delete("/api/jds/:id", (req, res) => {
@@ -286,25 +302,30 @@ app.post("/api/resumes/skill-matrix", async (req, res) => {
     const resumes = ids.map(getResume).filter(Boolean);
     if (!resumes.length) return res.status(404).json({ error: "no resumes found" });
 
-    // Resolve each involved JD's must-have skills + full text once.
-    const jdCache = new Map(); // jd_id -> { text, skills }
+    // Resolve each involved JD's must-have skills once.
+    const jdCache = new Map(); // jd_id -> { jd, skills }
     for (const r of resumes) {
       if (jdCache.has(r.jd_id)) continue;
       const jd = getJd(r.jd_id);
       if (!jd) continue;
       const skills = await ensureJdSkills(jd);
-      jdCache.set(r.jd_id, { text: await resolveJdText(jd), skills });
+      jdCache.set(r.jd_id, { jd, skills });
     }
 
-    // Union of skill columns across all involved JDs (dedupe by lowercased name).
-    const columns = [];
-    const colSeen = new Set();
+    // Union of skill columns across all involved JDs (dedupe by lowercased name),
+    // ordered so PRIMARY skills come before SECONDARY ones.
+    const colMap = new Map(); // lowerName -> { name, tier }
     for (const { skills } of jdCache.values()) {
       for (const s of skills) {
         const key = s.name.toLowerCase();
-        if (!colSeen.has(key)) { colSeen.add(key); columns.push(s.name); }
+        if (!colMap.has(key)) colMap.set(key, { name: s.name, tier: s.tier === "primary" ? "primary" : "secondary" });
       }
     }
+    const colDefs = [...colMap.values()];
+    const columns = [
+      ...colDefs.filter((c) => c.tier === "primary").map((c) => c.name),
+      ...colDefs.filter((c) => c.tier !== "primary").map((c) => c.name),
+    ];
 
     // Assess each resume against its own JD's skills (in parallel).
     const rows = await Promise.all(
@@ -326,8 +347,8 @@ app.post("/api/resumes/skill-matrix", async (req, res) => {
         }
         return {
           candidate: r.candidate_name || r.file_name,
-          job_id: r.jd_id,
-          job_description: entry?.text || "",
+          job_title: entry?.jd.title || "",
+          job_code: entry?.jd.job_code || "",
           final_score: r.overall_score ?? null,
           cells,
         };

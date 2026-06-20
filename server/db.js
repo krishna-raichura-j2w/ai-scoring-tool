@@ -79,6 +79,8 @@ function addColumnIfMissing(table, column, definition) {
 }
 // Cached must-have skills for the skills-matrix CSV export (extracted from JD + notes).
 addColumnIfMissing("jds", "must_have_skills", "TEXT");
+// User-provided human-readable job identifier (distinct from the internal UUID).
+addColumnIfMissing("jds", "job_code", "TEXT");
 
 // JSON columns are stored as text; (de)serialize at the edges.
 const JSON_FIELDS = {

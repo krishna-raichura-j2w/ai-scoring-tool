@@ -20,15 +20,19 @@ export const api = {
   // jds
   getAllJds: () => json(fetch(url("/api/jds"))),
   getJds: (clientId) => json(fetch(url(`/api/jds?client_id=${clientId}`))),
-  addJd: (client_id, raw_text) =>
-    json(fetch(url("/api/jds"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ client_id, raw_text }) })),
-  uploadJd: (client_id, file) => {
+  addJd: (client_id, raw_text, meta = {}) =>
+    json(fetch(url("/api/jds"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ client_id, raw_text, ...meta }) })),
+  uploadJd: (client_id, file, meta = {}) => {
     const fd = new FormData();
     fd.append("client_id", client_id);
+    if (meta.title) fd.append("title", meta.title);
+    if (meta.job_code) fd.append("job_code", meta.job_code);
     fd.append("file", file);
     return json(fetch(url("/api/jds/upload"), { method: "POST", body: fd }));
   },
   retryJd: (id) => json(fetch(url(`/api/jds/${id}/retry`), { method: "POST" })),
+  updateJd: (id, fields) =>
+    json(fetch(url(`/api/jds/${id}`), { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(fields) })),
   deleteJd: (id) => json(fetch(url(`/api/jds/${id}`), { method: "DELETE" })),
   getQuestions: (id) => json(fetch(url(`/api/jds/${id}/questions`))),
   genQuestions: (id, extra_context) =>

@@ -3,33 +3,101 @@
 @tailwind utilities;
 
 :root {
-  --background: 0 0% 100%;
-  --foreground: 222 47% 11%;
+  /* Warm "paper" surface, charcoal ink, deep indigo brand. */
+  --background: 40 30% 98%;
+  --foreground: 222 28% 13%;
   --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
-  --primary: 221 83% 53%;
+  --card-foreground: 222 28% 13%;
+  --primary: 230 60% 47%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 210 40% 96%;
-  --secondary-foreground: 222 47% 11%;
-  --muted: 210 40% 96%;
-  --muted-foreground: 215 16% 47%;
-  --accent: 214 95% 93%;
-  --accent-foreground: 221 83% 33%;
-  --destructive: 0 72% 51%;
+  --secondary: 40 16% 94%;
+  --secondary-foreground: 222 24% 18%;
+  --muted: 40 16% 95%;
+  --muted-foreground: 220 12% 44%;
+  --accent: 230 64% 95%;
+  --accent-foreground: 230 58% 38%;
+  --destructive: 352 70% 50%;
   --destructive-foreground: 0 0% 100%;
-  --border: 214 32% 91%;
-  --input: 214 32% 91%;
-  --ring: 221 83% 53%;
-  --radius: 0.6rem;
+  --border: 38 18% 90%;
+  --input: 38 18% 88%;
+  --ring: 230 60% 47%;
+  --radius: 0.75rem;
 }
 
 * {
   border-color: hsl(var(--border));
 }
+
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   margin: 0;
-  background: hsl(var(--background));
+  min-height: 100vh;
+  background-color: hsl(var(--background));
+  /* Soft atmospheric mesh so surfaces sit on depth rather than flat color. */
+  background-image:
+    radial-gradient(60% 50% at 100% 0%, hsl(230 60% 47% / 0.06) 0%, transparent 60%),
+    radial-gradient(50% 50% at 0% 100%, hsl(38 70% 60% / 0.05) 0%, transparent 55%);
+  background-attachment: fixed;
   color: hsl(var(--foreground));
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: "Hanken Grotesk", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-feature-settings: "ss01", "cv01";
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Fine grain overlay for a tactile, premium texture. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.022'/%3E%3C/svg%3E");
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+}
+
+/* Tabular figures so scores and numbers stay aligned. */
+.font-mono,
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Refined serif display, with optical sizing for headings/wordmark. */
+.font-serif {
+  font-optical-sizing: auto;
+  letter-spacing: -0.01em;
+}
+
+::selection {
+  background: hsl(var(--primary) / 0.18);
+  color: hsl(var(--foreground));
+}
+
+/* Slim, unobtrusive scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.25);
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.4);
+  background-clip: content-box;
 }

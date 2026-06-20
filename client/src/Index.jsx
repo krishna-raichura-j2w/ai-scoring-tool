@@ -3,7 +3,7 @@ import { api } from "./api.js";
 import { useToast } from "./toast.jsx";
 import {
   Briefcase, Plus, Upload, FileText, Users, Loader2, Trash2, ChevronRight,
-  ChevronDown, ChevronUp, Download, FileSpreadsheet, X, RefreshCw, Star, Sparkles,
+  ChevronDown, ChevronUp, Download, FileSpreadsheet, X, RefreshCw, Star, Sparkles, Pencil,
 } from "lucide-react";
 import jsPDF from "jspdf";
 
@@ -36,8 +36,12 @@ export default function Index() {
   const [contextDraft, setContextDraft] = useState({});
   const [newClient, setNewClient] = useState("");
   const [jdText, setJdText] = useState("");
+  const [newJobTitle, setNewJobTitle] = useState("");
+  const [newJobCode, setNewJobCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [editingJd, setEditingJd] = useState(null);
+  const [editDraft, setEditDraft] = useState({ title: "", job_code: "" });
 
   const activeClientRef = useRef(null);
   activeClientRef.current = activeClient;
@@ -106,8 +110,8 @@ export default function Index() {
     if (!jdText.trim()) return toast({ title: "JD required", description: "Paste text or upload a JD file", variant: "destructive" });
     setBusy(true);
     try {
-      await api.addJd(activeClient, jdText);
-      setJdText("");
+      await api.addJd(activeClient, jdText, { title: newJobTitle.trim(), job_code: newJobCode.trim() });
+      setJdText(""); setNewJobTitle(""); setNewJobCode("");
       toast({ title: "JD added", description: "Extracting criteria & generating questions…" });
       await load();
     } catch (e) { toast({ title: "Error", description: e.message, variant: "destructive" }); }
@@ -119,7 +123,8 @@ export default function Index() {
     if (!activeClient) return toast({ title: "Pick a client first" });
     setBusy(true);
     try {
-      await api.uploadJd(activeClient, file);
+      await api.uploadJd(activeClient, file, { title: newJobTitle.trim(), job_code: newJobCode.trim() });
+      setNewJobTitle(""); setNewJobCode("");
       toast({ title: "JD uploaded", description: "Extracting criteria & generating questions…" });
       await load();
     } catch (e) { toast({ title: "Upload failed", description: e.message, variant: "destructive" }); }
@@ -139,6 +144,19 @@ export default function Index() {
       toast({ title: "Retrying extraction…" });
       load();
     } catch (e) { toast({ title: "Retry failed", description: e.message, variant: "destructive" }); }
+  }
+
+  function startEditJd(jd) {
+    setEditingJd(jd.id);
+    setEditDraft({ title: jd.title ?? "", job_code: jd.job_code ?? "" });
+  }
+  async function saveJdMeta(id) {
+    try {
+      await api.updateJd(id, { title: editDraft.title.trim(), job_code: editDraft.job_code.trim() });
+      setEditingJd(null);
+      await load();
+      toast({ title: "JD updated" });
+    } catch (e) { toast({ title: "Update failed", description: e.message, variant: "destructive" }); }
   }
 
   async function uploadResumes(files) {
@@ -199,17 +217,23 @@ export default function Index() {
     try {
       const { columns, rows } = await api.skillMatrix(selectedResumes.map((r) => r.id));
       const cellText = (cell) =>
-        !cell ? "" : cell.score == null ? cell.statement : `${cell.statement} (${cell.score})`;
+        !cell ? "" : cell.score == null ? cell.statement : `${cell.statement} (${cell.score}/100)`;
       const data = [
-        ["Candidate Name", "Job ID", "Job Description", ...columns, "Final Score"],
+        ["Candidate Name", "Job Title", "Job ID", ...columns, "Final Score"],
         ...rows.map((row) => [
-          row.candidate ?? "", row.job_id ?? "", row.job_description ?? "",
+          row.candidate ?? "", row.job_title ?? "", row.job_code ?? "",
           ...columns.map((c) => cellText(row.cells?.[c])),
           row.final_score?.toString() ?? "",
         ]),
       ];
       const csv = data.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
-      downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8;" }), "skills-matrix.csv");
+      // Filename: <client>_<job title>.csv (falls back gracefully across multiple roles).
+      const slug = (s) => String(s || "").trim().replace(/[^\w.-]+/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
+      const clientName = clients.find((c) => c.id === activeClient)?.name;
+      const titles = [...new Set(rows.map((r) => r.job_title).filter(Boolean))];
+      const jobTitle = titles.length === 1 ? titles[0] : titles.length ? `${titles.length}_roles` : "skills_matrix";
+      const filename = `${slug(clientName) || "client"}_${slug(jobTitle) || "skills_matrix"}.csv`;
+      downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8;" }), filename);
       toast({ title: "Skills matrix exported", description: `${rows.length} candidate(s) × ${columns.length} skill(s)` });
     } catch (e) {
       toast({ title: "Export failed", description: e.message, variant: "destructive" });
@@ -299,18 +323,26 @@ export default function Index() {
   }
 
   return (
-    <div className="min-h-screen flex w-full bg-background text-foreground">
+    <div className="min-h-screen flex w-full text-foreground">
       {/* Sidebar */}
-      <aside className="w-72 border-r border-border bg-card flex flex-col shrink-0">
-        <div className="p-6">
-          <div className="flex items-center gap-2 mb-5">
-            <Users className="w-3.5 h-3.5 text-muted-foreground" />
-            <h2 className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest">Resume Matcher Pro</h2>
+      <aside className="w-72 border-r border-border/70 bg-card/70 backdrop-blur-xl flex flex-col shrink-0">
+        <div className="h-[60px] px-5 flex items-center border-b border-border/70 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary to-[hsl(230_70%_62%)] flex items-center justify-center shadow-card shrink-0">
+              <Sparkles className="w-5 h-5 text-primary-foreground" strokeWidth={2.3} />
+            </div>
+            <div className="leading-none">
+              <div className="font-serif text-[15px] font-semibold tracking-tight text-foreground">Resume Matcher</div>
+              <div className="text-[9px] font-bold text-muted-foreground uppercase tracking-[0.22em] mt-1.5">Talent Intelligence</div>
+            </div>
           </div>
+        </div>
+        <div className="p-5">
           <div className="relative mb-6">
             <Input placeholder="New client" value={newClient} onChange={(e) => setNewClient(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && addClient()} className="pl-3 pr-10 py-2 bg-muted border-0 rounded-lg text-sm h-9" />
-            <button onClick={addClient} className="absolute right-1 top-1 h-7 w-7 bg-primary text-primary-foreground rounded-md flex items-center justify-center hover:opacity-90 transition">
+              onKeyDown={(e) => e.key === "Enter" && addClient()} className="pr-11 bg-muted/60 border-transparent" />
+            <button onClick={addClient} aria-label="Add client"
+              className="absolute right-1.5 top-1.5 h-7 w-7 bg-primary text-primary-foreground rounded-lg flex items-center justify-center shadow-subtle hover:brightness-110 active:scale-95 transition">
               <Plus className="w-4 h-4" strokeWidth={2.5} />
             </button>
           </div>
@@ -378,29 +410,44 @@ export default function Index() {
           </div>
         ) : (
           <>
-            <header className="bg-card border-b border-border px-8 py-3 flex items-center justify-between sticky top-0 z-20">
+            <header className="bg-card/70 backdrop-blur-xl border-b border-border/70 px-8 h-[60px] flex items-center justify-between sticky top-0 z-20">
               <div className="flex gap-8">
                 <TabBtn active={tab === "jds"} onClick={() => setTab("jds")}>Job Descriptions</TabBtn>
                 <TabBtn active={tab === "resumes"} onClick={() => setTab("resumes")}>Resumes</TabBtn>
               </div>
-              <div className="text-xs text-muted-foreground">
-                <span className="uppercase tracking-wider font-semibold">Client</span>
-                <span className="ml-2 text-foreground font-semibold">{clients.find((c) => c.id === activeClient)?.name}</span>
+              <div className="flex items-center gap-2 text-xs">
+                <span className="uppercase tracking-wider font-semibold text-muted-foreground/70">Client</span>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-accent text-accent-foreground font-semibold">
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+                  {clients.find((c) => c.id === activeClient)?.name}
+                </span>
               </div>
             </header>
 
-            <div className="p-8 max-w-5xl w-full mx-auto space-y-6">
+            <div key={tab} className="p-8 max-w-6xl w-full mx-auto space-y-6 animate-fade-up">
               {tab === "jds" && (
                 <>
-                  <Card className="p-6 shadow-sm">
-                    <h3 className="font-semibold mb-1">Upload a Job Description</h3>
-                    <p className="text-xs text-muted-foreground mb-3">The job title will be auto-extracted from the JD.</p>
+                  <Card className="p-6">
+                    <h3 className="font-serif text-lg font-semibold tracking-tight">Add a Job Description</h3>
+                    <p className="text-xs text-muted-foreground mt-0.5 mb-4">Set the title &amp; job ID, or leave the title blank to auto-extract it from the JD.</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                      <div>
+                        <label className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">Job Title <span className="font-medium normal-case tracking-normal text-muted-foreground/60">· optional</span></label>
+                        <Input placeholder="e.g. Senior Backend Engineer" value={newJobTitle}
+                          onChange={(e) => setNewJobTitle(e.target.value)} className="mt-1.5" />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">Job ID <span className="font-medium normal-case tracking-normal text-muted-foreground/60">· optional</span></label>
+                        <Input placeholder="e.g. ENG-1042" value={newJobCode}
+                          onChange={(e) => setNewJobCode(e.target.value)} className="mt-1.5 font-mono" />
+                      </div>
+                    </div>
                     <Textarea placeholder="Paste the full Job Description here…" value={jdText}
                       onChange={(e) => setJdText(e.target.value)} rows={8} className="mb-3" />
                     <div className="flex flex-wrap gap-2">
                       <Button onClick={addJd} disabled={busy}>
                         {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
-                        Add JD & Extract Criteria
+                        Add JD &amp; Extract Criteria
                       </Button>
                       <input type="file" accept=".pdf,.docx,.txt" id="jd-file-upload" className="hidden"
                         onChange={(e) => { uploadJdFile(e.target.files?.[0] ?? null); e.target.value = ""; }} />
@@ -416,18 +463,42 @@ export default function Index() {
                     {clientJds.length === 0 && <p className="text-sm text-muted-foreground">No JDs yet for this client.</p>}
                     {clientJds.map((jd) => (
                       <Card key={jd.id} className="p-6 shadow-sm">
-                        <div className="flex items-start justify-between mb-3">
-                          <div>
-                            <h4 className="font-semibold">{jd.title}</h4>
-                            <Badge variant={jd.status === "ready" ? "default" : "secondary"} className="mt-1">
-                              {jd.status === "extracting" && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
-                              {jd.status}
-                            </Badge>
-                          </div>
-                          <div className="flex gap-2">
+                        <div className="flex items-start justify-between mb-3 gap-3">
+                          {editingJd === jd.id ? (
+                            <div className="flex-1 min-w-0 space-y-2">
+                              <Input value={editDraft.title} placeholder="Job title"
+                                onChange={(e) => setEditDraft((d) => ({ ...d, title: e.target.value }))}
+                                className="h-9 text-sm font-semibold" />
+                              <Input value={editDraft.job_code} placeholder="Job ID (e.g. ENG-1042)"
+                                onChange={(e) => setEditDraft((d) => ({ ...d, job_code: e.target.value }))}
+                                onKeyDown={(e) => e.key === "Enter" && saveJdMeta(jd.id)}
+                                className="h-9 text-sm" />
+                              <div className="flex gap-2">
+                                <Button size="sm" onClick={() => saveJdMeta(jd.id)}>Save</Button>
+                                <Button size="sm" variant="ghost" onClick={() => setEditingJd(null)}>Cancel</Button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h4 className="font-semibold">{jd.title}</h4>
+                                {jd.job_code && <Badge variant="outline" className="font-mono text-[10px]">{jd.job_code}</Badge>}
+                              </div>
+                              <Badge variant={jd.status === "ready" ? "default" : "secondary"} className="mt-1">
+                                {jd.status === "extracting" && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
+                                {jd.status}
+                              </Badge>
+                            </div>
+                          )}
+                          <div className="flex gap-2 shrink-0">
                             {jd.status === "error" && (
                               <Button size="sm" variant="outline" onClick={() => retryExtractJd(jd.id)}>
                                 <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Retry
+                              </Button>
+                            )}
+                            {editingJd !== jd.id && (
+                              <Button size="sm" variant="outline" onClick={() => startEditJd(jd)}>
+                                <Pencil className="w-3.5 h-3.5 mr-1.5" /> Edit
                               </Button>
                             )}
                             <Button size="sm" variant="outline" onClick={() => { setActiveJd(jd.id); setTab("resumes"); setSelected(new Set()); }}>
@@ -538,38 +609,38 @@ export default function Index() {
 
               {tab === "resumes" && (
                 <>
-                  <Card className="p-6 shadow-sm flex flex-col md:flex-row md:items-end md:justify-between gap-6">
-                    <div className="flex-1">
-                      <label className="block text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-2">Filter by JD</label>
+                  <Card className="p-6 shadow-sm">
+                    <label className="block text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-2">Filter by JD</label>
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                       <select value={activeJd ?? "all"} onChange={(e) => { setActiveJd(e.target.value === "all" ? null : e.target.value); setSelected(new Set()); }}
-                        className="w-full bg-muted/60 border border-border rounded-md h-10 px-3 text-sm font-medium">
+                        className="flex-1 bg-muted/60 border border-border rounded-md h-10 px-3 text-sm font-medium">
                         <option value="all">All JDs ({clientJds.length})</option>
                         {clientJds.map((j) => <option key={j.id} value={j.id}>{j.title}</option>)}
                       </select>
-                    </div>
-                    <div className="flex-1 flex flex-col gap-2">
                       {activeJd ? (
                         <>
                           <input type="file" multiple accept=".pdf,.docx,.txt" id="resume-upload" className="hidden"
                             onChange={(e) => { uploadResumes(e.target.files); e.target.value = ""; }} />
-                          <Button asChild disabled={busy} className="w-full h-10 shadow-md shadow-primary/10 font-semibold">
+                          <Button asChild disabled={busy} className="w-full sm:w-auto h-10 px-6 shrink-0 shadow-md shadow-primary/10 font-semibold">
                             <label htmlFor="resume-upload" className="cursor-pointer">
                               {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
                               Upload Resumes (PDF / DOCX / TXT)
                             </label>
                           </Button>
-                          <p className="text-[10px] text-muted-foreground text-center uppercase tracking-tight">
-                            Uploading to: <span className="text-primary font-bold">{clientJds.find((j) => j.id === activeJd)?.title}</span>
-                          </p>
                         </>
                       ) : (
-                        <p className="text-xs text-muted-foreground text-center py-3">Select a specific JD above to upload resumes.</p>
+                        <p className="text-xs text-muted-foreground sm:py-0 py-1 shrink-0">Select a specific JD to upload resumes.</p>
                       )}
                     </div>
+                    {activeJd && (
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-tight mt-2.5 text-right">
+                        Uploading to: <span className="text-primary font-bold">{clientJds.find((j) => j.id === activeJd)?.title}</span>
+                      </p>
+                    )}
                   </Card>
 
                   {selected.size > 0 && (
-                    <div className="sticky top-[57px] z-10 flex items-center gap-2 bg-primary text-primary-foreground rounded-lg px-4 py-2.5 shadow-md">
+                    <div className="sticky top-[60px] z-10 flex items-center gap-2 bg-primary text-primary-foreground rounded-lg px-4 py-2.5 shadow-md">
                       <span className="text-sm font-medium flex-1">{selected.size} selected</span>
                       <Button size="sm" variant="secondary" onClick={exportCsv}><FileSpreadsheet className="w-4 h-4 mr-1.5" /> Details (CSV)</Button>
                       <Button size="sm" variant="secondary" onClick={exportSkillsMatrix} disabled={exporting}>
@@ -790,15 +861,16 @@ export default function Index() {
 function cx(...a) { return a.filter(Boolean).join(" "); }
 
 function Button({ variant = "default", size = "default", asChild, disabled, className, children, ...props }) {
-  const base = "inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus:outline-none";
+  const base = "inline-flex items-center justify-center rounded-lg font-semibold tracking-tight transition-all duration-200 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ring/15 active:scale-[0.97] select-none";
   const variants = {
-    default: "bg-primary text-primary-foreground hover:opacity-90",
-    outline: "border border-border bg-background hover:bg-muted text-foreground",
-    ghost: "hover:bg-muted text-foreground",
-    secondary: "bg-secondary text-secondary-foreground hover:opacity-90",
+    default: "bg-primary text-primary-foreground shadow-subtle hover:shadow-card hover:brightness-110",
+    outline: "border border-border bg-card/70 text-foreground hover:bg-muted hover:border-muted-foreground/25",
+    ghost: "text-foreground hover:bg-muted",
+    secondary: "bg-card text-foreground border border-border/70 shadow-subtle hover:shadow-card hover:-translate-y-px",
+    destructive: "bg-destructive text-destructive-foreground shadow-subtle hover:brightness-110",
   };
-  const sizes = { default: "h-9 px-4 py-2", sm: "h-8 px-3 text-xs", icon: "h-9 w-9" };
-  const cls = cx(base, variants[variant], sizes[size], disabled && "opacity-50 pointer-events-none", className);
+  const sizes = { default: "h-10 px-4 text-sm", sm: "h-8 px-3 text-xs", icon: "h-9 w-9" };
+  const cls = cx(base, variants[variant], sizes[size], disabled && "opacity-50 pointer-events-none shadow-none", className);
   if (asChild) {
     const child = Array.isArray(children) ? children[0] : children;
     return <span className={cls} aria-disabled={disabled || undefined} {...props}>{child}</span>;
@@ -807,39 +879,43 @@ function Button({ variant = "default", size = "default", asChild, disabled, clas
 }
 
 function Card({ className, children, ...props }) {
-  return <div className={cx("rounded-lg border border-border bg-card text-card-foreground", className)} {...props}>{children}</div>;
+  return <div className={cx("rounded-2xl border border-border/70 bg-card text-card-foreground shadow-card", className)} {...props}>{children}</div>;
 }
 function Input({ className, ...props }) {
-  return <input className={cx("flex h-9 w-full rounded-md border border-border bg-background px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40", className)} {...props} />;
+  return <input className={cx("flex h-10 w-full rounded-lg border border-input bg-card px-3.5 text-sm text-foreground placeholder:text-muted-foreground/60 transition-all duration-200 focus:outline-none focus:border-primary focus:ring-4 focus:ring-ring/10", className)} {...props} />;
 }
 function Textarea({ className, ...props }) {
-  return <textarea className={cx("flex w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40", className)} {...props} />;
+  return <textarea className={cx("flex w-full rounded-xl border border-input bg-card px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/60 leading-relaxed transition-all duration-200 focus:outline-none focus:border-primary focus:ring-4 focus:ring-ring/10", className)} {...props} />;
 }
 function Badge({ variant = "default", className, children }) {
   const variants = {
-    default: "bg-primary text-primary-foreground border-transparent",
+    default: "bg-primary text-primary-foreground border-transparent shadow-subtle",
     secondary: "bg-secondary text-secondary-foreground border-transparent",
-    outline: "border border-border text-foreground",
+    outline: "border border-border bg-card/60 text-muted-foreground",
   };
-  return <span className={cx("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold", variants[variant], className)}>{children}</span>;
+  return <span className={cx("inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold", variants[variant], className)}>{children}</span>;
 }
 function Checkbox({ checked, onChange }) {
   return <input type="checkbox" checked={!!checked} onChange={(e) => onChange(e.target.checked)}
-    className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40 cursor-pointer" />;
+    className="h-4 w-4 rounded-[5px] border-input text-primary focus:ring-2 focus:ring-ring/30 cursor-pointer accent-[hsl(var(--primary))]" />;
 }
 function TabBtn({ active, onClick, children }) {
   return (
-    <button className={cx("text-sm pb-3 -mb-3 transition-colors", active ? "font-semibold text-foreground border-b-2 border-primary" : "font-medium text-muted-foreground hover:text-foreground/80")} onClick={onClick}>
+    <button onClick={onClick}
+      className={cx("relative text-sm transition-colors duration-200", active ? "font-bold text-foreground" : "font-medium text-muted-foreground hover:text-foreground")}>
       {children}
+      <span className={cx("absolute -bottom-2 left-0 right-0 h-0.5 rounded-full bg-primary transition-all duration-300 origin-left", active ? "scale-x-100 opacity-100" : "scale-x-0 opacity-0")} />
     </button>
   );
 }
 function EmptyState({ title, desc }) {
   return (
-    <div className="flex flex-col items-center justify-center py-32 text-center">
-      <div className="w-16 h-16 rounded-2xl bg-accent flex items-center justify-center mb-4"><Briefcase className="w-7 h-7 text-accent-foreground" /></div>
-      <h2 className="text-xl font-semibold">{title}</h2>
-      <p className="text-muted-foreground mt-2 max-w-sm">{desc}</p>
+    <div className="flex flex-col items-center justify-center py-32 text-center animate-fade-up">
+      <div className="w-20 h-20 rounded-[1.4rem] bg-gradient-to-br from-accent to-card flex items-center justify-center mb-5 shadow-card border border-border/60 rotate-3">
+        <Briefcase className="w-8 h-8 text-accent-foreground" />
+      </div>
+      <h2 className="font-serif text-2xl font-semibold tracking-tight">{title}</h2>
+      <p className="text-muted-foreground mt-2 max-w-sm leading-relaxed">{desc}</p>
     </div>
   );
 }

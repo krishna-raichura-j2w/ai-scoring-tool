@@ -139,17 +139,18 @@ Score honestly. If information is missing, score conservatively and say so in th
 
 // ---- 5. Extract must-have skills from a JD + additional notes ----------------
 export async function extractMustHaveSkills(jdText, extraContext) {
-  const system = `You are an expert technical recruiter. From a job description and the recruiter's additional notes, extract the concrete MUST-HAVE skills used to rank candidates.
+  const system = `You are an expert technical recruiter. From a job description and the recruiter's additional notes, extract the concrete skills used to rank candidates, and classify each as PRIMARY or SECONDARY.
 Return STRICT JSON:
 {
   "skills": [
-    { "name": "short skill name (2-4 words)", "description": "what evidence in a resume satisfies this skill" }
+    { "name": "short skill name (2-4 words)", "tier": "primary | secondary", "description": "what evidence in a resume satisfies this skill" }
   ]
 }
 Rules:
 - 5 to 12 skills. Focus on hard requirements (technologies, tools, domains, concrete competencies), not generic soft skills unless the role clearly demands them.
-- Treat the ADDITIONAL NOTES as higher priority than the JD when they conflict or add requirements.
-- Keep names short and use them consistently.`;
+- PRIMARY = core, non-negotiable must-haves the role centers on (and anything the notes emphasize). SECONDARY = supporting / nice-to-have / lower-weight skills.
+- Treat the ADDITIONAL NOTES as higher priority than the JD; a skill stressed in the notes is PRIMARY.
+- List PRIMARY skills before SECONDARY ones. Keep names short and use them consistently.`;
   const notes = extraContext
     ? `\n\nADDITIONAL NOTES (weight these higher than the JD):\n"""\n${extraContext}\n"""`
     : "";
@@ -157,23 +158,30 @@ Rules:
   const data = await chatJSON(system, user);
   const skills = Array.isArray(data.skills) ? data.skills : [];
   return skills
-    .map((s) => ({ name: String(s.name || "").trim(), description: String(s.description || "").trim() }))
+    .map((s) => ({
+      name: String(s.name || "").trim(),
+      tier: String(s.tier || "").toLowerCase() === "primary" ? "primary" : "secondary",
+      description: String(s.description || "").trim(),
+    }))
     .filter((s) => s.name);
 }
 
 // ---- 6. Assess one resume against a list of must-have skills -----------------
 export async function assessSkills(resumeText, skills) {
   if (!skills.length) return [];
-  const system = `You assess a candidate's resume against a fixed list of MUST-HAVE skills.
+  const system = `You assess a candidate's resume against a fixed list of skills.
 Return STRICT JSON:
 {
   "assessments": [
-    { "skill": "<must exactly match a provided skill name>", "statement": "1-2 sentence evidence-based statement on how this candidate demonstrates (or lacks) this skill", "score": <0-100> }
+    { "skill": "<must exactly match a provided skill name>", "statement": "crisp evidence fragment", "score": <0-100> }
   ]
 }
 Rules:
 - Return exactly one assessment for EVERY provided skill, using the same skill name.
-- Base statements only on the resume. If there is no evidence, say so plainly and score low.`;
+- Base statements only on the resume.
+- STATEMENT STYLE: short and crisp, max ~12 words. State the evidence directly as a fragment — do NOT start with "The candidate", "This candidate", "Has", or "Demonstrates". Examples: "7 yrs Node.js building payment APIs at Acme." / "Led 4-person team at a fintech startup." / "No evidence in resume."
+- Make each statement specific to ITS skill — cite the evidence most relevant to that skill rather than reusing one sentence across skills.
+- If there is no evidence, statement = "No evidence in resume." and score low.`;
   const user = `MUST-HAVE SKILLS:\n${JSON.stringify(
     skills
   )}\n\nRESUME:\n"""\n${resumeText.slice(0, 14000)}\n"""`;
