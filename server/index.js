@@ -136,6 +136,46 @@ async function processJdQuestions(jdId, extraContext) {
   }
 }
 
+async function processJdMcqs(jdId, extraContext) {
+  const done = jobLog.step("generate MCQs", { jd: jdId });
+  try {
+    db.prepare("UPDATE jds SET mcq_status='generating' WHERE id=?").run(jdId);
+    const jd = getJd(jdId);
+    if (!jd) { jobLog.warn("JD not found", { jd: jdId }); return; }
+    const ctx = extraContext ?? jd.extra_context;
+    // Per-skill test: 6 MCQs (2 Easy / 2 Medium / 2 Hard) for each must-have skill.
+    // Pass the full JD so the model calibrates question depth to the role's seniority.
+    const jdText = await resolveJdText(jd);
+    const skills = await ensureJdSkills(jd);
+    if (!skills.length) throw new Error("No skills available to build a test from.");
+    const perSkill = await Promise.all(
+      skills.map((s) => ai.generateSkillMcqs(s, jd.title, jdText, ctx).catch(() => []))
+    );
+    const mcqs = perSkill.flat();
+
+    db.prepare("DELETE FROM jd_mcqs WHERE jd_id=?").run(jdId);
+    const ins = db.prepare(
+      `INSERT INTO jd_mcqs (id, jd_id, question, options, answer_index, difficulty, explanation, skill, order_index)
+       VALUES (?,?,?,?,?,?,?,?,?)`
+    );
+    db.exec("BEGIN");
+    try {
+      mcqs.forEach((m, i) =>
+        ins.run(randomUUID(), jdId, m.question, j(m.options), m.answer_index, m.difficulty, m.explanation || null, m.skill || null, i)
+      );
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+    db.prepare("UPDATE jds SET mcq_status='ready' WHERE id=?").run(jdId);
+    done({ skills: skills.length, mcqs: mcqs.length });
+  } catch (e) {
+    jobLog.error("generate MCQs failed", { jd: jdId, error: String(e.message || e) });
+    db.prepare("UPDATE jds SET mcq_status='error' WHERE id=?").run(jdId);
+  }
+}
+
 async function processResumeScore(resumeId) {
   const done = resumeLog.step("score vs JD", { resume: resumeId });
   try {
@@ -254,6 +294,21 @@ app.post("/api/jds/:id/questions", (req, res) => {
 
 app.get("/api/jds/:id/questions", (req, res) => {
   res.json(db.prepare("SELECT * FROM jd_questions WHERE jd_id=? ORDER BY order_index").all(req.params.id));
+});
+
+// MCQ test bank — generated on demand (not auto-generated like interview questions).
+app.post("/api/jds/:id/mcqs", (req, res) => {
+  const { extra_context } = req.body || {};
+  if (extra_context !== undefined)
+    db.prepare("UPDATE jds SET extra_context=?, must_have_skills=NULL WHERE id=?")
+      .run(extra_context, req.params.id);
+  processJdMcqs(req.params.id, extra_context);
+  res.json({ ok: true });
+});
+
+app.get("/api/jds/:id/mcqs", (req, res) => {
+  const rows = db.prepare("SELECT * FROM jd_mcqs WHERE jd_id=? ORDER BY order_index").all(req.params.id);
+  res.json(rows.map((m) => ({ ...m, options: m.options ? JSON.parse(m.options) : [] })));
 });
 
 // Resolved full JD text — handles both pasted text and uploaded files (file: indirection).

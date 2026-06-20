@@ -93,6 +93,63 @@ Produce 6-10 high-signal questions tailored to the role.`;
   return Array.isArray(data.questions) ? data.questions : [];
 }
 
+// ---- 2b. Generate a multiple-choice screening test, per skill ---------------
+// Builds 6 MCQs for ONE skill: 2 Easy, 2 Medium, 2 Hard. Called once per skill so
+// each skill reliably gets the full difficulty spread.
+export async function generateSkillMcqs(skill, roleTitle, jdText, extraContext) {
+  const system = `You are a senior technical interviewer writing a RIGOROUS multiple-choice screening test for ONE specific skill, calibrated to a particular role.
+
+Before writing, infer from the JOB DESCRIPTION the role's SENIORITY (e.g. junior, mid, senior, staff/lead) and the depth of expertise expected. Pitch every question to that bar.
+
+Return STRICT JSON:
+{
+  "mcqs": [
+    {
+      "question": "an applied, scenario-based question that tests this skill",
+      "options": ["option A", "option B", "option C", "option D"],
+      "answer_index": 0,
+      "difficulty": "Easy | Medium | Hard",
+      "explanation": "1 sentence on why the correct option is right (and why the tempting wrong one is wrong)"
+    }
+  ]
+}
+Rules:
+- EXACTLY 6 questions for the given skill: exactly 2 "Easy", 2 "Medium" and 2 "Hard" — where difficulty is RELATIVE TO THIS ROLE'S LEVEL, not absolute beginner level.
+  • Easy: a practical applied question a competent person AT THIS LEVEL answers quickly. NOT trivia, NOT acronym/definition recall.
+  • Medium: requires reasoning across concepts, comparing trade-offs, or spotting a common mistake.
+  • Hard: deep edge cases, subtle bugs, design/architecture trade-offs, performance or correctness pitfalls that separate strong engineers from average ones.
+- STRICTLY AVOID definitional or recall questions such as "What does X stand for", "Which of these is a use case for Y", or "What is the primary function of Z". Instead ask "Given <situation>, what happens / what is the best approach / why does this fail / what is the trade-off".
+- For senior/lead roles, even Easy questions must be substantive — assume strong fundamentals and test judgment.
+- Ground questions in realistic engineering situations implied by the JD and notes.
+- EXACTLY 4 plausible options; exactly one defensible correct answer. "answer_index" is the 0-based index (0-3).`;
+  const ctx = extraContext
+    ? `\n\nADDITIONAL NOTES (weight these higher than the JD):\n"""\n${extraContext}\n"""`
+    : "";
+  const jd = jdText ? `\n\nJOB DESCRIPTION (use ONLY to gauge seniority, domain and depth):\n"""\n${jdText.slice(0, 6000)}\n"""` : "";
+  const user = `ROLE: ${roleTitle || "the role"}\nSKILL TO TEST: ${skill.name}${
+    skill.description ? `\nWHAT IT MEANS: ${skill.description}` : ""
+  }${jd}${ctx}`;
+  const data = await chatJSON(system, user, `generateSkillMcqs:${skill.name}`);
+  const raw = Array.isArray(data.mcqs) ? data.mcqs : [];
+  const allowed = new Set(["Easy", "Medium", "Hard"]);
+  return raw
+    .map((m) => {
+      const options = Array.isArray(m.options) ? m.options.map((o) => String(o)).slice(0, 4) : [];
+      let idx = Number(m.answer_index);
+      if (!Number.isInteger(idx) || idx < 0 || idx > 3) idx = 0;
+      const difficulty = allowed.has(m.difficulty) ? m.difficulty : "Medium";
+      return {
+        skill: skill.name,
+        question: String(m.question || "").trim(),
+        options,
+        answer_index: idx,
+        difficulty,
+        explanation: String(m.explanation || "").trim(),
+      };
+    })
+    .filter((m) => m.question && m.options.length === 4);
+}
+
 // ---- 3. Score a resume against the JD ---------------------------------------
 export async function scoreResume(resumeText, jd) {
   const criteria = jd.criteria?.criteria || [];

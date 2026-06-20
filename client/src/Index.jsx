@@ -4,6 +4,7 @@ import { useToast } from "./toast.jsx";
 import {
   Briefcase, Plus, Upload, FileText, Users, Loader2, Trash2, ChevronRight,
   ChevronDown, ChevronUp, Download, FileSpreadsheet, X, RefreshCw, Star, Sparkles, Pencil, Maximize2,
+  Check, Eye, EyeOff, ListChecks,
 } from "lucide-react";
 import jsPDF from "jspdf";
 
@@ -35,6 +36,7 @@ export default function Index() {
   const [jds, setJds] = useState([]);
   const [resumes, setResumes] = useState([]);
   const [questions, setQuestions] = useState([]);
+  const [mcqs, setMcqs] = useState([]);
   const [activeClient, setActiveClient] = useState(null);
   const [activeJd, setActiveJd] = useState(null);
   const [tab, setTab] = useState("jd"); // role sub-tab: jd | questions | resumes
@@ -52,6 +54,9 @@ export default function Index() {
   const [minimizedShortlist, setMinimizedShortlist] = useState(new Set());
   const [jdTexts, setJdTexts] = useState({}); // jd_id -> full JD text (lazy-loaded)
   const [pdfExpanded, setPdfExpanded] = useState(false); // full-screen JD PDF viewer
+  const [showAnswers, setShowAnswers] = useState(true); // reveal correct MCQ answers
+  const [mcqFilter, setMcqFilter] = useState("All"); // MCQ difficulty filter
+  const [mcqSkill, setMcqSkill] = useState("All"); // MCQ skill filter
   const [busy, setBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [editingJd, setEditingJd] = useState(null);
@@ -83,8 +88,8 @@ export default function Index() {
     return () => { cancelled = true; };
   }, [activeJd, jdTexts, jds]);
 
-  // Close the expanded PDF viewer when the open role changes.
-  useEffect(() => { setPdfExpanded(false); }, [activeJd]);
+  // Reset per-role view state (PDF viewer, MCQ filters) when the open role changes.
+  useEffect(() => { setPdfExpanded(false); setMcqFilter("All"); setMcqSkill("All"); }, [activeJd]);
   // Keep the active client expanded in the sidebar.
   useEffect(() => {
     if (activeClient)
@@ -96,7 +101,7 @@ export default function Index() {
     const t = setInterval(() => {
       if (!activeClientRef.current) return;
       const inFlight =
-        jds.some((j) => j.status === "extracting" || j.questions_status === "generating") ||
+        jds.some((j) => j.status === "extracting" || j.questions_status === "generating" || j.mcq_status === "generating") ||
         resumes.some((r) => r.status === "scoring" || r.shortlist_status === "scoring");
       if (inFlight) load();
     }, 2500);
@@ -115,14 +120,18 @@ export default function Index() {
     const [allClients, allJds] = await Promise.all([api.getClients(), api.getAllJds()]);
     setClients(allClients);
     setJds(allJds);
-    if (!clientId) { setResumes([]); setQuestions([]); return; }
+    if (!clientId) { setResumes([]); setQuestions([]); setMcqs([]); return; }
     const clientJdList = allJds.filter((x) => x.client_id === clientId);
-    const [r, qLists] = await Promise.all([
+    // MCQs are on-demand — only fetch them for JDs that have actually started/built a set.
+    const mcqJdList = clientJdList.filter((x) => x.mcq_status && x.mcq_status !== "idle");
+    const [r, qLists, mcqLists] = await Promise.all([
       api.getResumes(clientId),
       Promise.all(clientJdList.map((x) => api.getQuestions(x.id))),
+      Promise.all(mcqJdList.map((x) => api.getMcqs(x.id))),
     ]);
     setResumes(r);
     setQuestions(qLists.flat());
+    setMcqs(mcqLists.flat());
   }
 
   async function addClient() {
@@ -505,6 +514,7 @@ export default function Index() {
         <div className="px-8 flex gap-7">
           <TabBtn active={tab === "jd"} onClick={() => setTab("jd")}>Job Description</TabBtn>
           <TabBtn active={tab === "questions"} onClick={() => setTab("questions")}>Interview Questions</TabBtn>
+          <TabBtn active={tab === "mcqs"} onClick={() => setTab("mcqs")}>MCQ Test</TabBtn>
           <TabBtn active={tab === "resumes"} onClick={() => setTab("resumes")}>Resumes{nResumes > 0 ? ` (${nResumes})` : ""}</TabBtn>
         </div>
       </div>
@@ -637,6 +647,118 @@ export default function Index() {
     );
   }
 
+  // MCQ test panel: on-demand multiple-choice screening set with marked answers.
+  function renderMcqs(jd) {
+    const jdMcqs = mcqs.filter((m) => m.jd_id === jd.id);
+    const isGenerating = jd.mcq_status === "generating";
+    const draft = contextDraft[jd.id] ?? jd.extra_context ?? "";
+    const generate = (withContext) => {
+      api.genMcqs(jd.id, withContext ? draft : undefined);
+      setJds((prev) => prev.map((x) => x.id === jd.id ? { ...x, mcq_status: "generating" } : x));
+      toast({ title: "Generating MCQ test…", description: "Building a multiple-choice screening set." });
+    };
+    if (jd.status !== "ready")
+      return <Card className="p-8 text-center text-sm text-muted-foreground">The MCQ test is available once the JD finishes extracting.</Card>;
+
+    const diffBadge = (d) => d === "Easy" ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+      : d === "Hard" ? "bg-rose-50 text-rose-700 border-rose-200" : "bg-amber-50 text-amber-700 border-amber-200";
+    // Skills present in this test (in generation order).
+    const skillList = [...new Set(jdMcqs.map((m) => m.skill).filter(Boolean))];
+    const bySkill = mcqSkill === "All" ? jdMcqs : jdMcqs.filter((m) => m.skill === mcqSkill);
+    const count = (d) => bySkill.filter((m) => m.difficulty === d).length;
+    const filters = ["All", "Easy", "Medium", "Hard"];
+    const shown = mcqFilter === "All" ? bySkill : bySkill.filter((m) => m.difficulty === mcqFilter);
+
+    return (
+      <div className="space-y-4">
+        <Card className="p-5">
+          <div className="flex items-center gap-2 mb-1">
+            <ListChecks className="w-4 h-4 text-primary" />
+            <h3 className="font-semibold text-sm">Multiple-Choice Screening Test</h3>
+          </div>
+          <p className="text-xs text-muted-foreground mb-3">6 questions per required skill (2 Easy · 2 Medium · 2 Hard), four options each, with the correct answer marked. Filter by skill or difficulty below.</p>
+          <Textarea placeholder="Optional: focus areas, e.g. emphasize system design & SQL…" value={draft}
+            onChange={(e) => setContextDraft({ ...contextDraft, [jd.id]: e.target.value })} rows={2} className="text-sm" />
+          <div className="flex justify-end gap-2 mt-3">
+            <Button size="sm" disabled={isGenerating} onClick={() => generate(true)}>
+              {isGenerating ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : jdMcqs.length > 0 ? <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> : <Sparkles className="w-3.5 h-3.5 mr-1.5" />}
+              {jdMcqs.length > 0 ? "Regenerate Test" : "Generate MCQ Test"}
+            </Button>
+          </div>
+        </Card>
+
+        {jdMcqs.length === 0 && !isGenerating && (
+          <div className="text-center py-12 text-muted-foreground">
+            <ListChecks className="w-8 h-8 mx-auto mb-3 opacity-40" />
+            <p className="text-sm">No MCQ test yet. Click <span className="font-semibold text-foreground">Generate MCQ Test</span> to build one from this JD.</p>
+          </div>
+        )}
+        {isGenerating && jdMcqs.length === 0 && <p className="text-sm text-muted-foreground px-1 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Generating test…</p>}
+
+        {jdMcqs.length > 0 && (
+          <div className="flex items-center justify-between flex-wrap gap-3 px-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              {skillList.length > 0 && (
+                <select value={mcqSkill} onChange={(e) => { setMcqSkill(e.target.value); setMcqFilter("All"); }}
+                  className="h-8 rounded-lg border border-border bg-card px-2.5 text-xs font-semibold text-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-ring/15">
+                  <option value="All">All skills ({jdMcqs.length})</option>
+                  {skillList.map((s) => (
+                    <option key={s} value={s}>{s} ({jdMcqs.filter((m) => m.skill === s).length})</option>
+                  ))}
+                </select>
+              )}
+              <div className="flex items-center gap-1.5">
+                {filters.map((f) => (
+                  <button key={f} onClick={() => setMcqFilter(f)}
+                    className={`text-xs font-semibold px-2.5 py-1 rounded-full border transition-colors ${mcqFilter === f ? "bg-primary text-primary-foreground border-transparent" : "border-border text-muted-foreground hover:bg-muted"}`}>
+                    {f}{f !== "All" ? ` (${count(f)})` : ` (${bySkill.length})`}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <button onClick={() => setShowAnswers((v) => !v)}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground">
+              {showAnswers ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              {showAnswers ? "Hide answers" : "Show answers"}
+            </button>
+          </div>
+        )}
+
+        {shown.map((m, mi) => (
+          <Card key={m.id} className="p-4">
+            <div className="flex items-start gap-3">
+              <span className="text-xs font-bold text-muted-foreground/60 w-5 pt-1">{mi + 1}</span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <p className="text-sm font-semibold text-foreground leading-snug">{m.question}</p>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {m.skill && <Badge variant="secondary" className="text-[10px]">{m.skill}</Badge>}
+                    <Badge variant="outline" className={diffBadge(m.difficulty)}>{m.difficulty}</Badge>
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  {m.options.map((opt, oi) => {
+                    const correct = showAnswers && oi === m.answer_index;
+                    return (
+                      <div key={oi} className={`flex items-center gap-2.5 rounded-lg border px-3 py-2 text-sm ${correct ? "bg-emerald-50 border-emerald-300 text-emerald-900 font-medium" : "border-border"}`}>
+                        <span className={`font-mono text-xs font-bold w-4 ${correct ? "text-emerald-700" : "text-muted-foreground/60"}`}>{String.fromCharCode(65 + oi)}</span>
+                        <span className="flex-1">{opt}</span>
+                        {correct && <Check className="w-4 h-4 text-emerald-600 shrink-0" />}
+                      </div>
+                    );
+                  })}
+                </div>
+                {showAnswers && m.explanation && (
+                  <p className="text-xs text-muted-foreground mt-2.5 leading-relaxed"><span className="font-semibold text-foreground/70">Why:</span> {m.explanation}</p>
+                )}
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex w-full text-foreground">
       {/* Sidebar */}
@@ -735,6 +857,7 @@ export default function Index() {
             <div key={activeJd + "-" + tab} className="p-8 w-full max-w-[1700px] space-y-6 animate-fade-up">
               {tab === "jd" && renderJdPanel(activeJdObj)}
               {tab === "questions" && renderQuestions(activeJdObj)}
+              {tab === "mcqs" && renderMcqs(activeJdObj)}
 
               {tab === "resumes" && (
                 <>

@@ -83,6 +83,25 @@ addColumnIfMissing("jds", "must_have_skills", "TEXT");
 addColumnIfMissing("jds", "job_code", "TEXT");
 // Cached per-skill assessments for the skills-matrix export (with a skill-set signature).
 addColumnIfMissing("resumes", "skill_assessments", "TEXT");
+// Status of the on-demand MCQ test bank for a JD.
+addColumnIfMissing("jds", "mcq_status", "TEXT NOT NULL DEFAULT 'idle'");
+
+// MCQ test bank generated from a JD (on-demand, to screen candidates with multiple choice).
+db.exec(`
+CREATE TABLE IF NOT EXISTS jd_mcqs (
+  id TEXT PRIMARY KEY,
+  jd_id TEXT NOT NULL REFERENCES jds(id) ON DELETE CASCADE,
+  question TEXT NOT NULL,
+  options TEXT,          -- JSON array of 4 option strings
+  answer_index INTEGER,  -- 0..3 index of the correct option
+  difficulty TEXT,       -- Easy | Medium | Hard
+  explanation TEXT,
+  skill TEXT,            -- the technical skill this question screens for
+  order_index INTEGER NOT NULL DEFAULT 0
+);
+`);
+// `skill` was added after the MCQ table shipped — backfill for existing DBs.
+addColumnIfMissing("jd_mcqs", "skill", "TEXT");
 
 // JSON columns are stored as text; (de)serialize at the edges.
 const JSON_FIELDS = {

@@ -39,6 +39,9 @@ export const api = {
   getQuestions: (id) => json(fetch(url(`/api/jds/${id}/questions`))),
   genQuestions: (id, extra_context) =>
     json(fetch(url(`/api/jds/${id}/questions`), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ extra_context }) })),
+  getMcqs: (id) => json(fetch(url(`/api/jds/${id}/mcqs`))),
+  genMcqs: (id, extra_context) =>
+    json(fetch(url(`/api/jds/${id}/mcqs`), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ extra_context }) })),
 
   // resumes
   getResumes: (clientId) => json(fetch(url(`/api/resumes?client_id=${clientId}`))),
