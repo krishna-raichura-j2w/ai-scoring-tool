@@ -2,26 +2,37 @@ import OpenAI from "openai";
 import dotenv from "dotenv";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import { logger } from "./log.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: join(__dirname, "..", ".env") });
 
+const log = logger("ai");
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
-// Single chat call that always returns parsed JSON.
-async function chatJSON(system, user) {
-  const res = await client.chat.completions.create({
-    model: MODEL,
-    temperature: 0.2,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-  });
-  const text = res.choices[0]?.message?.content || "{}";
-  return JSON.parse(text);
+// Single chat call that always returns parsed JSON. `label` names the operation in logs.
+async function chatJSON(system, user, label = "chat") {
+  const chars = system.length + user.length;
+  const done = log.step(`openai ${label}`, { model: MODEL, inChars: chars });
+  try {
+    const res = await client.chat.completions.create({
+      model: MODEL,
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    });
+    const text = res.choices[0]?.message?.content || "{}";
+    const u = res.usage || {};
+    done({ promptTokens: u.prompt_tokens, completionTokens: u.completion_tokens, outChars: text.length });
+    return JSON.parse(text);
+  } catch (e) {
+    log.error(`openai ${label} failed`, { error: String(e.message || e) });
+    throw e;
+  }
 }
 
 // ---- 1. Extract structured criteria + title from a JD ------------------------
@@ -40,7 +51,7 @@ Rules:
 - Weights MUST be integers that sum to exactly 100.
 - Keep names short (2-4 words).`;
   const user = `JOB DESCRIPTION:\n"""\n${rawText.slice(0, 12000)}\n"""`;
-  const data = await chatJSON(system, user);
+  const data = await chatJSON(system, user, "extractJdCriteria");
 
   // Normalise weights to sum to 100.
   let criteria = Array.isArray(data.criteria) ? data.criteria : [];
@@ -78,7 +89,7 @@ Produce 6-10 high-signal questions tailored to the role.`;
   const user = `JOB DESCRIPTION:\n"""\n${rawText.slice(0, 10000)}\n"""\n\nEXTRACTED CRITERIA:\n${JSON.stringify(
     criteria
   )}${ctx}`;
-  const data = await chatJSON(system, user);
+  const data = await chatJSON(system, user, "generateJdQuestions");
   return Array.isArray(data.questions) ? data.questions : [];
 }
 
@@ -107,7 +118,7 @@ Score honestly. If information is missing, score conservatively and say so in th
   const user = `RUBRIC CRITERIA (with weights):\n${JSON.stringify(
     criteria
   )}\n\nRESUME:\n"""\n${resumeText.slice(0, 14000)}\n"""`;
-  const data = await chatJSON(system, user);
+  const data = await chatJSON(system, user, "scoreResume");
 
   // Recompute overall from criteria + weights so it always matches the rubric.
   const cs = Array.isArray(data.criteria_scores) ? data.criteria_scores : [];
@@ -185,7 +196,7 @@ Rules:
   const user = `MUST-HAVE SKILLS:\n${JSON.stringify(
     skills
   )}\n\nRESUME:\n"""\n${resumeText.slice(0, 14000)}\n"""`;
-  const data = await chatJSON(system, user);
+  const data = await chatJSON(system, user, "assessSkills");
   const out = Array.isArray(data.assessments) ? data.assessments : [];
   return out.map((a) => ({
     skill: String(a.skill || "").trim(),
@@ -217,7 +228,7 @@ Return STRICT JSON:
     0,
     12000
   )}\n"""`;
-  const data = await chatJSON(system, user);
+  const data = await chatJSON(system, user, "scoreVsShortlist");
   return {
     score: Number.isFinite(Number(data.score)) ? Math.round(Number(data.score)) : null,
     summary: data.summary || null,

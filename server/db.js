@@ -81,11 +81,13 @@ function addColumnIfMissing(table, column, definition) {
 addColumnIfMissing("jds", "must_have_skills", "TEXT");
 // User-provided human-readable job identifier (distinct from the internal UUID).
 addColumnIfMissing("jds", "job_code", "TEXT");
+// Cached per-skill assessments for the skills-matrix export (with a skill-set signature).
+addColumnIfMissing("resumes", "skill_assessments", "TEXT");
 
 // JSON columns are stored as text; (de)serialize at the edges.
 const JSON_FIELDS = {
   jds: ["criteria", "must_have_skills"],
-  resumes: ["relevant_skills", "criteria_scores", "shortlist_scores"],
+  resumes: ["relevant_skills", "criteria_scores", "shortlist_scores", "skill_assessments"],
 };
 
 export function hydrate(table, row) {

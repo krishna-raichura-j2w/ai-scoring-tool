@@ -11,6 +11,9 @@ import dotenv from "dotenv";
 import { db, hydrate, hydrateAll } from "./db.js";
 import { extractText } from "./parse.js";
 import * as ai from "./ai.js";
+import { logger } from "./log.js";
+
+const log = logger("http");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: join(__dirname, "..", ".env") });
@@ -28,6 +31,16 @@ const upload = multer({ storage, limits: { fileSize: 25 * 1024 * 1024 } });
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
+
+// Request log: mutations at info, GET polling at debug to keep the default view clean.
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on("finish", () => {
+    const level = req.method === "GET" ? "debug" : "info";
+    log[level](`${req.method} ${req.path}`, { status: res.statusCode, ms: Date.now() - start });
+  });
+  next();
+});
 
 // ---------------------------------------------------------------- helpers ----
 const now = () => new Date().toISOString();
@@ -58,11 +71,19 @@ async function ensureJdSkills(jd) {
   return skills;
 }
 
+// Signature of the skill set a cached assessment was computed against (name + description,
+// the inputs that actually drive the assessment). Tier is excluded.
+const skillsSig = (skills) => JSON.stringify(skills.map((s) => [s.name, s.description]));
+
 // ---------------------------------------------- background AI processors -----
+const jobLog = logger("jd");
+const resumeLog = logger("resume");
+
 async function processJdCriteria(jdId) {
+  const done = jobLog.step("extract criteria", { jd: jdId });
   try {
     const jd = getJd(jdId);
-    if (!jd) return;
+    if (!jd) { jobLog.warn("JD not found", { jd: jdId }); return; }
     let text = jd.raw_text;
     if (text.startsWith("file:")) text = await extractText(text.slice(5));
     const { title, criteria } = await ai.extractJdCriteria(text);
@@ -73,17 +94,20 @@ async function processJdCriteria(jdId) {
       j(criteria),
       jdId
     );
+    done({ title: userTitle || title, criteria: criteria?.criteria?.length ?? 0 });
     processJdQuestions(jdId); // auto-generate questions after extraction
   } catch (e) {
+    jobLog.error("extract criteria failed", { jd: jdId, error: String(e.message || e) });
     db.prepare("UPDATE jds SET status='error', error=? WHERE id=?").run(String(e.message || e), jdId);
   }
 }
 
 async function processJdQuestions(jdId, extraContext) {
+  const done = jobLog.step("generate questions", { jd: jdId });
   try {
     db.prepare("UPDATE jds SET questions_status='generating' WHERE id=?").run(jdId);
     const jd = getJd(jdId);
-    if (!jd) return;
+    if (!jd) { jobLog.warn("JD not found", { jd: jdId }); return; }
     let text = jd.raw_text;
     if (text.startsWith("file:")) text = await extractText(text.slice(5));
     const ctx = extraContext ?? jd.extra_context;
@@ -105,42 +129,48 @@ async function processJdQuestions(jdId, extraContext) {
       throw e;
     }
     db.prepare("UPDATE jds SET questions_status='ready' WHERE id=?").run(jdId);
+    done({ questions: questions.length });
   } catch (e) {
-    console.error("[questions] error:", e);
+    jobLog.error("generate questions failed", { jd: jdId, error: String(e.message || e) });
     db.prepare("UPDATE jds SET questions_status='error' WHERE id=?").run(jdId);
   }
 }
 
 async function processResumeScore(resumeId) {
+  const done = resumeLog.step("score vs JD", { resume: resumeId });
   try {
     const r = getResume(resumeId);
-    if (!r) return;
+    if (!r) { resumeLog.warn("resume not found", { resume: resumeId }); return; }
     const jd = getJd(r.jd_id);
     const text = await extractText(r.file_path);
     const s = await ai.scoreResume(text, jd);
     db.prepare(
       `UPDATE resumes SET candidate_name=?, email=?, phone=?, linkedin_url=?, location=?, education=?,
         experience_range=?, current_company=?, relevant_skills=?, criteria_scores=?, overall_score=?,
-        summary=?, status='scored', error=NULL WHERE id=?`
+        summary=?, status='scored', error=NULL, skill_assessments=NULL WHERE id=?`
     ).run(
       s.candidate_name, s.email, s.phone, s.linkedin_url, s.location, s.education,
       s.experience_range, s.current_company, j(s.relevant_skills), j(s.criteria_scores),
       s.overall_score, s.summary, resumeId
     );
+    done({ candidate: s.candidate_name || r.file_name, score: s.overall_score });
   } catch (e) {
+    resumeLog.error("score vs JD failed", { resume: resumeId, error: String(e.message || e) });
     db.prepare("UPDATE resumes SET status='error', error=? WHERE id=?").run(String(e.message || e), resumeId);
   }
 }
 
 async function processShortlistScore(resumeId) {
+  const done = resumeLog.step("score vs shortlist", { resume: resumeId });
   try {
     const r = getResume(resumeId);
-    if (!r) return;
+    if (!r) { resumeLog.warn("resume not found", { resume: resumeId }); return; }
     const shortlisted = hydrateAll(
       "resumes",
       db.prepare("SELECT * FROM resumes WHERE jd_id=? AND is_shortlisted=1 AND id!=?").all(r.jd_id, resumeId)
     );
     if (shortlisted.length === 0) {
+      resumeLog.warn("no shortlisted candidates to compare against", { resume: resumeId });
       db.prepare("UPDATE resumes SET shortlist_status='error', shortlist_summary=? WHERE id=?")
         .run("No shortlisted candidates to compare against. Star some candidates first.", resumeId);
       return;
@@ -150,7 +180,9 @@ async function processShortlistScore(resumeId) {
     db.prepare(
       "UPDATE resumes SET shortlist_status='scored', shortlist_score=?, shortlist_scores=?, shortlist_summary=? WHERE id=?"
     ).run(out.score, j(out), out.summary, resumeId);
+    done({ comparedAgainst: shortlisted.length, score: out.score });
   } catch (e) {
+    resumeLog.error("score vs shortlist failed", { resume: resumeId, error: String(e.message || e) });
     db.prepare("UPDATE resumes SET shortlist_status='error', shortlist_summary=? WHERE id=?")
       .run(String(e.message || e), resumeId);
   }
@@ -305,6 +337,9 @@ app.post("/api/resumes/:id/score-vs-shortlist", (req, res) => {
 // Skills-matrix export: for each candidate, a per-must-have-skill statement +
 // score (assessed fresh against the resume), pivoted into one column per skill.
 app.post("/api/resumes/skill-matrix", async (req, res) => {
+  const matrixLog = logger("skill-matrix");
+  const done = matrixLog.step("export", { requested: req.body?.resume_ids?.length ?? 0 });
+  let cacheHits = 0, assessed = 0;
   try {
     const ids = Array.isArray(req.body?.resume_ids) ? req.body.resume_ids : [];
     if (!ids.length) return res.status(400).json({ error: "resume_ids required" });
@@ -343,10 +378,20 @@ app.post("/api/resumes/skill-matrix", async (req, res) => {
         const skills = entry?.skills || [];
         let assessments = [];
         if (skills.length) {
-          try {
-            const text = await extractText(r.file_path);
-            assessments = await ai.assessSkills(text, skills);
-          } catch { /* leave cells blank if the resume can't be read */ }
+          const sig = skillsSig(skills);
+          const cached = r.skill_assessments; // hydrated to an object (or null)
+          if (cached && cached.sig === sig && Array.isArray(cached.items)) {
+            assessments = cached.items; // cache hit — no AI call, no file read
+            cacheHits++;
+            matrixLog.debug("cache hit", { resume: r.id, candidate: r.candidate_name || r.file_name });
+          } else {
+            try {
+              const text = await extractText(r.file_path);
+              assessments = await ai.assessSkills(text, skills);
+              db.prepare("UPDATE resumes SET skill_assessments=? WHERE id=?").run(j({ sig, items: assessments }), r.id);
+              assessed++;
+            } catch (e) { matrixLog.warn("assess failed", { resume: r.id, error: String(e.message || e) }); }
+          }
         }
         const byName = new Map(assessments.map((a) => [a.skill.toLowerCase(), a]));
         const cells = {};
@@ -364,8 +409,10 @@ app.post("/api/resumes/skill-matrix", async (req, res) => {
       })
     );
 
+    done({ candidates: rows.length, columns: columns.length, cacheHits, assessed });
     res.json({ columns, rows });
   } catch (e) {
+    matrixLog.error("export failed", { error: String(e.message || e) });
     res.status(500).json({ error: String(e.message || e) });
   }
 });
@@ -385,4 +432,9 @@ if (existsSync(clientDist)) {
 }
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`Resume Matcher Pro running on http://localhost:${PORT}`));
+app.listen(PORT, () =>
+  log.info(`Resume Matcher Pro running on http://localhost:${PORT}`, {
+    model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+    logLevel: process.env.LOG_LEVEL || "info",
+  })
+);

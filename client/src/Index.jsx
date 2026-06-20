@@ -192,6 +192,21 @@ export default function Index() {
     load();
   }
 
+  async function deleteSelectedResumes() {
+    const ids = selectedResumes.map((r) => r.id);
+    if (ids.length === 0)
+      return toast({ title: "No candidates selected", description: "Select one or more candidates to delete.", variant: "destructive" });
+    if (!confirm(`Delete ${ids.length} selected resume${ids.length > 1 ? "s" : ""}? This cannot be undone.`)) return;
+    setBusy(true);
+    try {
+      await Promise.all(ids.map((id) => api.deleteResume(id)));
+      setSelected(new Set());
+      toast({ title: "Deleted", description: `${ids.length} resume${ids.length > 1 ? "s" : ""} removed.` });
+      await load();
+    } catch (e) { toast({ title: "Delete failed", description: e.message, variant: "destructive" }); }
+    setBusy(false);
+  }
+
   function toggleExpanded(id) {
     const next = new Set(expandedResumes);
     next.has(id) ? next.delete(id) : next.add(id);
@@ -211,7 +226,8 @@ export default function Index() {
   const selectedResumes = sortedResumes.filter((r) => selected.has(r.id));
 
   function exportCsv() {
-    if (selectedResumes.length === 0) return;
+    if (selectedResumes.length === 0)
+      return toast({ title: "No candidates selected", description: "Select one or more candidates to export.", variant: "destructive" });
     const rows = [
       ["Full Name", "Email", "Contact Number", "LinkedIn URL", "Current Location", "Education Background", "Experience Range", "Current Company", "Relevant Skills", "Score", "JD", "File Name"],
       ...selectedResumes.map((r) => [
@@ -229,7 +245,8 @@ export default function Index() {
   // Skills matrix: one column per must-have skill (from JD + notes); each cell is
   // an AI statement about the candidate for that skill, with the score appended.
   async function exportSkillsMatrix() {
-    if (selectedResumes.length === 0) return;
+    if (selectedResumes.length === 0)
+      return toast({ title: "No candidates selected", description: "Select one or more candidates to export.", variant: "destructive" });
     setExporting(true);
     try {
       const { columns, rows } = await api.skillMatrix(selectedResumes.map((r) => r.id));
@@ -259,7 +276,8 @@ export default function Index() {
   }
 
   function exportPdf() {
-    if (selectedResumes.length === 0) return;
+    if (selectedResumes.length === 0)
+      return toast({ title: "No candidates selected", description: "Select one or more candidates to export.", variant: "destructive" });
     const doc = new jsPDF({ unit: "pt", format: "a4" });
     const pageW = doc.internal.pageSize.getWidth();
     const pageH = doc.internal.pageSize.getHeight();
@@ -689,16 +707,25 @@ export default function Index() {
                     )}
                   </Card>
 
-                  {selected.size > 0 && (
+                  {sortedResumes.length > 0 && (
                     <div className="sticky top-[60px] z-10 flex items-center gap-2 bg-primary text-primary-foreground rounded-lg px-4 py-2.5 shadow-md">
-                      <span className="text-sm font-medium flex-1">{selected.size} selected</span>
+                      <span className="text-sm font-medium flex-1">
+                        {selected.size > 0 ? `${selected.size} selected` : "Select candidates to export"}
+                      </span>
                       <Button size="sm" variant="secondary" onClick={exportCsv}><FileSpreadsheet className="w-4 h-4 mr-1.5" /> Details (CSV)</Button>
                       <Button size="sm" variant="secondary" onClick={exportSkillsMatrix} disabled={exporting}>
                         {exporting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Sparkles className="w-4 h-4 mr-1.5" />}
                         Skills Matrix (CSV)
                       </Button>
                       <Button size="sm" variant="secondary" onClick={exportPdf}><Download className="w-4 h-4 mr-1.5" /> Reports (PDF)</Button>
-                      <Button size="sm" variant="ghost" className="text-primary-foreground hover:bg-primary/80" onClick={() => setSelected(new Set())}><X className="w-4 h-4" /></Button>
+                      {selected.size > 0 && (
+                        <>
+                          <Button size="sm" variant="secondary" onClick={deleteSelectedResumes} disabled={busy} className="text-rose-600 hover:text-rose-700">
+                            <Trash2 className="w-4 h-4 mr-1.5" /> Delete
+                          </Button>
+                          <Button size="sm" variant="ghost" className="text-primary-foreground hover:bg-primary/80" onClick={() => setSelected(new Set())} title="Clear selection"><X className="w-4 h-4" /></Button>
+                        </>
+                      )}
                     </div>
                   )}
 
