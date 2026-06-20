@@ -38,6 +38,9 @@ export default function Index() {
   const [jdText, setJdText] = useState("");
   const [newJobTitle, setNewJobTitle] = useState("");
   const [newJobCode, setNewJobCode] = useState("");
+  const [jdFile, setJdFile] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const [minimizedShortlist, setMinimizedShortlist] = useState(new Set());
   const [busy, setBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [editingJd, setEditingJd] = useState(null);
@@ -124,11 +127,20 @@ export default function Index() {
     setBusy(true);
     try {
       await api.uploadJd(activeClient, file, { title: newJobTitle.trim(), job_code: newJobCode.trim() });
-      setNewJobTitle(""); setNewJobCode("");
+      setNewJobTitle(""); setNewJobCode(""); setJdFile(null);
       toast({ title: "JD uploaded", description: "Extracting criteria & generating questions…" });
       await load();
     } catch (e) { toast({ title: "Upload failed", description: e.message, variant: "destructive" }); }
     setBusy(false);
+  }
+
+  // Single submit for the JD form: an attached file takes precedence over pasted text.
+  function submitJd() {
+    if (!activeClient) return toast({ title: "Pick a client first" });
+    if (jdFile) return uploadJdFile(jdFile);
+    if (!jdText.trim())
+      return toast({ title: "JD required", description: "Paste the JD text or attach a file.", variant: "destructive" });
+    return addJd();
   }
 
   async function deleteJd(id) {
@@ -442,21 +454,51 @@ export default function Index() {
                           onChange={(e) => setNewJobCode(e.target.value)} className="mt-1.5 font-mono" />
                       </div>
                     </div>
-                    <Textarea placeholder="Paste the full Job Description here…" value={jdText}
-                      onChange={(e) => setJdText(e.target.value)} rows={8} className="mb-3" />
-                    <div className="flex flex-wrap gap-2">
-                      <Button onClick={addJd} disabled={busy}>
-                        {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
-                        Add JD &amp; Extract Criteria
-                      </Button>
-                      <input type="file" accept=".pdf,.docx,.txt" id="jd-file-upload" className="hidden"
-                        onChange={(e) => { uploadJdFile(e.target.files?.[0] ?? null); e.target.value = ""; }} />
-                      <Button asChild variant="outline" disabled={busy}>
-                        <label htmlFor="jd-file-upload" className="cursor-pointer">
-                          <Upload className="w-4 h-4 mr-2" /> Upload JD File (PDF / DOCX / TXT)
-                        </label>
-                      </Button>
-                    </div>
+                    <input type="file" accept=".pdf,.docx,.txt" id="jd-file-upload" className="hidden"
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) setJdFile(f); e.target.value = ""; }} />
+
+                    {jdFile ? (
+                      /* A file is attached — show it as a chip; it will be used on submit. */
+                      <div className="flex items-center gap-3 rounded-xl border border-border bg-muted/40 px-4 py-3 mb-3 animate-scale-in">
+                        <div className="w-9 h-9 rounded-lg bg-accent flex items-center justify-center shrink-0">
+                          <FileText className="w-4 h-4 text-accent-foreground" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold truncate">{jdFile.name}</p>
+                          <p className="text-xs text-muted-foreground">{Math.max(1, Math.round(jdFile.size / 1024))} KB · ready to extract</p>
+                        </div>
+                        <label htmlFor="jd-file-upload" className="text-xs font-semibold text-primary hover:underline cursor-pointer">Replace</label>
+                        <button onClick={() => setJdFile(null)} className="text-muted-foreground hover:text-foreground p-1 rounded-md hover:bg-muted" aria-label="Remove file">
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      /* Paste text, or drag-and-drop / attach a file into the same field. */
+                      <div className="relative mb-3"
+                        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+                        onDragLeave={(e) => { e.preventDefault(); setDragging(false); }}
+                        onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files?.[0]; if (f) setJdFile(f); }}>
+                        <Textarea placeholder="Paste the full Job Description here…" value={jdText}
+                          onChange={(e) => setJdText(e.target.value)} rows={8} />
+                        <div className="flex items-center gap-1.5 mt-2 text-xs text-muted-foreground">
+                          <Upload className="w-3.5 h-3.5 shrink-0" />
+                          <span>Drag &amp; drop or</span>
+                          <label htmlFor="jd-file-upload" className="font-semibold text-primary hover:underline cursor-pointer">attach a PDF / DOCX / TXT</label>
+                        </div>
+                        {dragging && (
+                          <div className="absolute inset-0 -m-1 rounded-xl bg-accent/70 backdrop-blur-sm border-2 border-dashed border-primary flex items-center justify-center pointer-events-none">
+                            <span className="text-sm font-semibold text-accent-foreground flex items-center gap-2">
+                              <Upload className="w-4 h-4" /> Drop JD file to attach
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <Button onClick={submitJd} disabled={busy}>
+                      {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
+                      {jdFile ? "Upload JD & Extract Criteria" : "Add JD & Extract Criteria"}
+                    </Button>
                   </Card>
 
                   <div className="space-y-3">
@@ -813,14 +855,26 @@ export default function Index() {
                             </div>
                           )}
 
-                          {(r.shortlist_score != null || r.shortlist_summary || r.shortlist_status === "scoring") && (
-                            <div className="border-t border-amber-200 bg-amber-50/40 px-6 py-5 space-y-4">
-                              <div className="flex items-center gap-2">
-                                <Sparkles className="w-4 h-4 text-amber-600" />
-                                <span className="text-[11px] font-bold text-amber-800 uppercase tracking-widest">
+                          {(r.shortlist_score != null || r.shortlist_summary || r.shortlist_status === "scoring") && (() => {
+                            const minimized = minimizedShortlist.has(r.id);
+                            const toggleShortlist = () => setMinimizedShortlist((prev) => {
+                              const next = new Set(prev);
+                              next.has(r.id) ? next.delete(r.id) : next.add(r.id);
+                              return next;
+                            });
+                            return (
+                            <div className="border-t border-amber-200 bg-amber-50/40 px-6 py-4 space-y-4">
+                              <button onClick={toggleShortlist} className="flex items-center gap-2 w-full text-left group">
+                                <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
+                                <span className="text-[11px] font-bold text-amber-800 uppercase tracking-widest flex-1">
                                   Alignment vs Shortlisted Candidates{r.shortlist_scores?.compared_against ? ` (${r.shortlist_scores.compared_against} profiles)` : ""}
                                 </span>
-                              </div>
+                                {r.shortlist_score != null && minimized && (
+                                  <span className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold border-2 ${scoreRing(r.shortlist_score)}`}>{Math.round(r.shortlist_score)}</span>
+                                )}
+                                {minimized ? <ChevronDown className="w-4 h-4 text-amber-700 shrink-0" /> : <ChevronUp className="w-4 h-4 text-amber-700 shrink-0" />}
+                              </button>
+                              {!minimized && (<>
                               {r.shortlist_status === "scoring" && <p className="text-sm text-muted-foreground flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Comparing…</p>}
                               {r.shortlist_status === "error" && r.shortlist_summary && <p className="text-sm text-rose-600">{r.shortlist_summary}</p>}
                               {r.shortlist_status === "scored" && (
@@ -841,8 +895,10 @@ export default function Index() {
                                   )}
                                 </>
                               )}
+                              </>)}
                             </div>
-                          )}
+                            );
+                          })()}
                         </Card>
                       );
                     })}
