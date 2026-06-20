@@ -11,7 +11,9 @@ export default defineConfig({
       // proxy), so in dev we proxy the prefixed path and strip the base before
       // forwarding to the backend, which serves routes under /api.
       "/j2w-ai-scoring-agent/api": {
-        target: "http://localhost:3001",
+        // Explicit 127.0.0.1 (not "localhost") and a dedicated port avoid a clash
+        // with other tools (e.g. VS Code) that may grab 3001 on the loopback.
+        target: "http://127.0.0.1:5050",
         rewrite: (p) => p.replace(/^\/j2w-ai-scoring-agent/, ""),
       },
     },

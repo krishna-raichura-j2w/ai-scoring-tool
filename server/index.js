@@ -259,11 +259,20 @@ app.get("/api/resumes", (req, res) => {
   res.json(hydrateAll("resumes", rows));
 });
 
-app.post("/api/resumes/upload", upload.array("files"), (req, res) => {
+// Cap per-upload batch size to protect the app and the AI scoring pipeline.
+const MAX_RESUMES_PER_UPLOAD = 10;
+
+app.post("/api/resumes/upload", upload.array("files"), async (req, res) => {
+  const files = req.files || [];
+  const cleanup = () => Promise.all(files.map((f) => rm(f.path, { force: true }).catch(() => {})));
   const { jd_id } = req.body || {};
-  if (!jd_id) return res.status(400).json({ error: "jd_id required" });
+  if (!jd_id) { await cleanup(); return res.status(400).json({ error: "jd_id required" }); }
+  if (files.length > MAX_RESUMES_PER_UPLOAD) {
+    await cleanup(); // discard the temp files multer already wrote
+    return res.status(400).json({ error: `Upload at most ${MAX_RESUMES_PER_UPLOAD} resumes at a time.` });
+  }
   const created = [];
-  for (const f of req.files || []) {
+  for (const f of files) {
     const id = randomUUID();
     db.prepare(
       "INSERT INTO resumes (id, jd_id, file_name, file_path, status, created_at) VALUES (?,?,?,?, 'scoring', ?)"

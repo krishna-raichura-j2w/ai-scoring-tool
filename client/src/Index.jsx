@@ -7,6 +7,9 @@ import {
 } from "lucide-react";
 import jsPDF from "jspdf";
 
+// Cap per-upload batch size to protect the app and the AI scoring pipeline.
+const MAX_RESUMES_PER_UPLOAD = 10;
+
 const scoreRing = (s) => {
   if (s == null) return "bg-muted text-muted-foreground border-border";
   if (s >= 80) return "bg-emerald-50 text-emerald-700 border-emerald-200";
@@ -173,6 +176,8 @@ export default function Index() {
 
   async function uploadResumes(files) {
     if (!files || !files.length || !activeJd) return toast({ title: "Pick a JD first" });
+    if (files.length > MAX_RESUMES_PER_UPLOAD)
+      return toast({ title: "Too many files", description: `Upload at most ${MAX_RESUMES_PER_UPLOAD} resumes at a time.`, variant: "destructive" });
     setBusy(true);
     try {
       await api.uploadResumes(activeJd, Array.from(files));
@@ -675,9 +680,12 @@ export default function Index() {
                       )}
                     </div>
                     {activeJd && (
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-tight mt-2.5 text-right">
-                        Uploading to: <span className="text-primary font-bold">{clientJds.find((j) => j.id === activeJd)?.title}</span>
-                      </p>
+                      <div className="flex items-center justify-between gap-2 mt-2.5">
+                        <p className="text-[10px] text-muted-foreground tracking-tight">Up to {MAX_RESUMES_PER_UPLOAD} files per upload.</p>
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-tight text-right">
+                          Uploading to: <span className="text-primary font-bold">{clientJds.find((j) => j.id === activeJd)?.title}</span>
+                        </p>
+                      </div>
                     )}
                   </Card>
 
